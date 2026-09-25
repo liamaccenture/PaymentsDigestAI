@@ -3,9 +3,6 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 import feedparser
 from datetime import datetime
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import re
 from html import escape
 import requests
@@ -50,42 +47,61 @@ else:
     raise ValueError(f"Unknown LLM_PROVIDER: '{LLM_PROVIDER}'. Use 'openai' or 'anthropic'.")
 # ────────────────────────────────────────────────────────────────────────────────────────
 
-RSS_FEEDS = {
-    # 'SWIFT': 'https://www.swift.com/news-events/rss'
-
-    # ===== CENTRAL BANKS & REGULATORS =====
-    'Bank of England - News': 'https://www.bankofengland.co.uk/rss/news',
-    'Bank of England - Publications': 'https://www.bankofengland.co.uk/rss/publications',
-    'Bank of England - Prudential Regulation': 'https://www.bankofengland.co.uk/rss/prudential-regulation-publications',
-    'FCA - News': 'https://www.fca.org.uk/news/rss.xml',
-    'HM Treasury': 'https://www.gov.uk/government/organisations/hm-treasury.atom',
-    'ECB - Press Releases': 'https://www.ecb.europa.eu/rss/press.html',
-    'European Banking Authority': 'https://www.eba.europa.eu/rss.xml',
-    'Financial Stability Board': 'https://www.fsb.org/feed/',
-    # 'SWIFT': 'https://www.swift.com/news-events/news' # Do not use
-
-    # ===== PAYMENTS INDUSTRY PUBLICATIONS =====
-    'PaymentsSource': 'https://www.americanbanker.com/feed?rss=true',
-    'PYMNTS': 'https://www.pymnts.com/feed/',
-    'Finextra - Payments': 'https://www.finextra.com/rss/channel.aspx?channel=payments',
-    'The Payments Association': 'https://www.thepaymentsassociation.org/feed/',
-    # 'Finextra': 'https://www.finextra.com/rss/payments.aspx',
-    'Payments Dive': 'https://www.paymentsdive.com/feeds/news/',
-    # 'Fintech Weekly': 'https://www.fintechweekly.com/feed/',
-
-    # ===== UK FINANCIAL SERVICES =====
-    'UK Finance': 'https://www.ukfinance.org.uk/rss.xml',
-
-    # ===== INFRASTRUCTURE & NETWORKS =====
-    'EBA Clearing': 'https://www.ebaclearing.eu/feed/',
-
-    # ===== GENERAL FINANCIAL NEWS =====
-    'Financial Times - Payments': 'https://www.ft.com/payments?format=rss',
-    'Sky News - Business': 'https://feeds.skynews.com/feeds/rss/business.xml',
-
+# Cost per token by model (input_rate, output_rate) — update when pricing changes
+PRICING = {
+    "gpt-5.6-luna":              (0.20 / 1_000_000,  1.20 / 1_000_000),
+    "gpt-5.6-terra":             (2.00 / 1_000_000, 12.00 / 1_000_000),
+    "gpt-5.5":                   (5.00 / 1_000_000, 30.00 / 1_000_000),
+    "gpt-4o-mini":               (0.15 / 1_000_000,  0.60 / 1_000_000),
+    "gpt-4o":                    (2.50 / 1_000_000, 10.00 / 1_000_000),
+    "claude-sonnet-4-6":         (3.00 / 1_000_000, 15.00 / 1_000_000),
+    "claude-haiku-4-5-20251001": (0.80 / 1_000_000,  4.00 / 1_000_000),
+    "claude-opus-4-6":           (15.0 / 1_000_000, 75.00 / 1_000_000),
 }
 
-articlesCountPerFeed = 7
+# Known regulatory events to always surface in the EVENTS section.
+# Keep this list current — the AI will drop past dates automatically via the prompt rule.
+KNOWN_EVENTS = [
+    {"date": "30 Sep 2026", "event": "UK cryptoasset authorisation gateway opens",    "type": "reg",   "url": "https://www.fca.org.uk/", "relevance": "High"},
+    {"date": "Nov 2026",    "event": "STEP2 DKK go-live (EBA Clearing)",              "type": "infra", "url": "https://www.ebaclearing.eu/", "relevance": "High"},
+    {"date": "1 Jan 2027",  "event": "Basel 3.1 UK go-live",                          "type": "reg",   "url": "https://www.bankofengland.co.uk/", "relevance": "High"},
+    {"date": "25 Oct 2027", "event": "UK cryptoasset full regime enters force",       "type": "reg",   "url": "https://www.fca.org.uk/", "relevance": "High"},
+]
+
+RSS_FEEDS = {
+    # ===== CENTRAL BANKS & REGULATORS =====
+    'Bank of England - News':                  'https://www.bankofengland.co.uk/rss/news',
+    'Bank of England - Publications':          'https://www.bankofengland.co.uk/rss/publications',
+    'Bank of England - Prudential Regulation': 'https://www.bankofengland.co.uk/rss/prudential-regulation-publications',
+    'FCA - News':                              'https://www.fca.org.uk/news/rss.xml',
+    'HM Treasury':                             'https://www.gov.uk/government/organisations/hm-treasury.atom',
+    'ECB - Press Releases':                    'https://www.ecb.europa.eu/rss/press.html',
+    'European Banking Authority':              'https://www.eba.europa.eu/rss.xml',
+    'Financial Stability Board':               'https://www.fsb.org/feed/',
+
+    # ===== PAYMENTS INDUSTRY PUBLICATIONS =====
+    'PaymentsSource':                          'https://www.americanbanker.com/feed?rss=true',
+    'PYMNTS':                                  'https://www.pymnts.com/feed/',
+    'Finextra - Payments':                     'https://www.finextra.com/rss/channel.aspx?channel=payments',
+    'The Payments Association':                'https://www.thepaymentsassociation.org/feed/',
+    'Payments Dive':                           'https://www.paymentsdive.com/feeds/news/',
+
+    # ===== UK FINANCIAL SERVICES =====
+    'UK Finance':                              'https://www.ukfinance.org.uk/rss.xml',
+
+    # ===== INFRASTRUCTURE & NETWORKS =====
+    'EBA Clearing':                            'https://www.ebaclearing.eu/feed/',
+
+    # ===== GENERAL FINANCIAL NEWS =====
+    'Financial Times - Payments':              'https://www.ft.com/payments?format=rss',
+    'Sky News - Business':                     'https://feeds.skynews.com/feeds/rss/business.xml',
+}
+
+# Inactive feeds (kept for reference):
+# 'SWIFT':          'https://www.swift.com/news-events/rss'  — unstable, do not use
+# 'Fintech Weekly': 'https://www.fintechweekly.com/feed/'    — low signal
+
+articles_per_feed = 7
 
 # ========================================================================================
 
@@ -125,11 +141,11 @@ def fetch_news():
             
             # Extract articles
             article_count = 0
-            for entry in feed.entries[:articlesCountPerFeed]:
+            for entry in feed.entries[:articles_per_feed]:
                 article = {
                     'source': source_name,
-                    'title': entry.title,
-                    'link': entry.link,
+                    'title': entry.get('title', 'No title'),
+                    'link': entry.get('link', ''),
                     'published': entry.get('published', 'No date'),
                     'summary': entry.get('summary', entry.get('description', 'No summary'))
                 }
@@ -193,8 +209,8 @@ def fetch_scheme_press():
 
     schemes = [
         ("https://usa.visa.com/about-visa/newsroom/press-releases.html", "Visa"),
-        # ("https://www.mastercard.com/news/press/", "Mastercard"),
-        # ("https://www.swift.com/news-events/press-releases", "SWIFT"),
+        ("https://www.mastercard.com/news/press/", "Mastercard"),
+        ("https://www.swift.com/news-events/press-releases", "SWIFT"),
     ]
 
     for url, name in schemes:
@@ -211,6 +227,13 @@ def fetch_scheme_press():
 def build_ai_input_document(articles):
     """Turn RSS articles into a compact, model-friendly document."""
     lines = []
+
+    # Seed known regulatory events so the AI always surfaces them in the EVENTS block.
+    # The prompt rule "future dates only" will drop any that have already passed.
+    known_block = "[KNOWN_REGULATORY_EVENTS — always include future-dated entries in the EVENTS table]\n"
+    for ev in KNOWN_EVENTS:
+        known_block += f"Date: {ev['date']} | Event: {ev['event']} | Type: {ev['type']} | URL: {ev['url']} | Relevance: {ev['relevance']}\n"
+    lines.append(known_block)
 
     for i, article in enumerate(articles, 1):
         # Clean summary (RSS summaries can be HTML)
@@ -245,6 +268,16 @@ def extract_blocks(text: str) -> dict:
     return blocks
 
 def parse_stories(block_text: str) -> str:
+    FONT = "font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;"
+    TAG_INLINE = {
+        "tag-risk":       "background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;",
+        "tag-regulatory": "background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;",
+        "tag-tech":       "background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;",
+        "tag-infra":      "background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;",
+        "tag-macro":      "background:#faf5ff;color:#7e22ce;border:1px solid #e9d5ff;",
+        "tag-scheme":     "background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;",
+    }
+
     html_parts = []
     for chunk in block_text.strip().split("---"):
         chunk = chunk.strip()
@@ -255,7 +288,6 @@ def parse_stories(block_text: str) -> str:
             line = line.strip()
             if not line:
                 continue
-            # Handle pipe-separated pairs on one line: SRC:X|TAG:Y|LABEL:Z
             if "|" in line and ":" in line:
                 for part in line.split("|"):
                     part = part.strip()
@@ -277,25 +309,54 @@ def parse_stories(block_text: str) -> str:
         scheme  = fields.get("SCHEME", "")
         geo     = fields.get("GEO", "")
 
+        tag_style = TAG_INLINE.get(tag_raw, "background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;")
+
         extra_bullets = ""
         if scheme:
-            extra_bullets += f'<li><b>Scheme impact:</b> {escape(scheme)}</li>\n'
+            extra_bullets += (
+                f'<li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}">'
+                f'<b>Scheme impact:</b> {escape(scheme)}</li>\n'
+            )
         if geo:
-            extra_bullets += f'<li><b>UK/EMEA relevance:</b> {escape(geo)}</li>\n'
+            extra_bullets += (
+                f'<li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}">'
+                f'<b>UK/EMEA relevance:</b> {escape(geo)}</li>\n'
+            )
+
+        consult_li = (
+            f'    <li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}"><b>Opportunity:</b> {escape(consult)}</li>\n'
+            if consult else ""
+        )
 
         html_parts.append(
-            f'<div class="story">\n'
-            f'<div class="kicker"><div class="src">{escape(src_tag)}</div>'
-            f'<span class="tag {escape(tag_raw)}">{escape(label)}</span></div>\n'
-            f'<h3>{escape(head)}</h3>\n'
-            f'<ul class="bullets">\n'
-            f'<li><b>Why it matters:</b> {escape(why)}</li>\n'
-            f'<li><b>Key takeaway:</b> {escape(take)}</li>\n'
-            f'<li><b>Opportunity:</b> {escape(consult)}</li>\n'
+            # Outer card — table replaces div.story so Outlook renders the border
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" class="story"'
+            f' style="border:1px solid #d1d5db;border-radius:14px;margin-bottom:12px;background:#ffffff;">\n'
+            f'<tr><td style="padding:14px;{FONT}">\n'
+            # Kicker row — table replaces div.kicker (flex not supported in Outlook)
+            f'  <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">\n'
+            f'  <tr valign="middle">\n'
+            f'    <td style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#4b5563;{FONT}">{escape(src_tag)}</td>\n'
+            f'    <td align="right">'
+            f'<span class="tag {escape(tag_raw)}" style="font-size:11px;font-weight:600;border-radius:999px;padding:4px 9px;{tag_style}{FONT}">'
+            f'{escape(label)}</span></td>\n'
+            f'  </tr>\n'
+            f'  </table>\n'
+            # Headline
+            f'  <h3 style="margin:8px 0 6px;font-size:14px;color:#111827;{FONT}">{escape(head)}</h3>\n'
+            # Bullets
+            f'  <ul style="margin:10px 0 0;padding-left:18px;color:#374151;">\n'
+            f'    <li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}"><b>Why it matters:</b> {escape(why)}</li>\n'
+            f'    <li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}"><b>Key takeaway:</b> {escape(take)}</li>\n'
+            f'{consult_li}'
             f'{extra_bullets}'
-            f'</ul>\n'
-            f'<a class="btn" href="{url}" aria-label="Read more: {escape(head)}">Read →</a>\n'
-            f'</div>'
+            f'  </ul>\n'
+            # Filled blue button — renders as a proper CTA in Outlook
+            f'  <a href="{url}" class="btn" style="display:inline-block;margin-top:10px;padding:8px 14px;border-radius:10px;'
+            f'background:#2563eb;font-size:12px;color:#ffffff;font-weight:600;text-decoration:none;{FONT}"'
+            f' aria-label="Read more: {escape(head)}">Read &#8594;</a>\n'
+            f'</td></tr>\n'
+            f'</table>'
         )
     return "\n".join(html_parts)
 
@@ -387,7 +448,8 @@ NEWSLETTER_PROMPT = """
 
     GEOGRAPHIC RULE (CRITICAL): Primary audience is UK and EMEA Payments professionals.
     Prioritise UK first, then EMEA. Include global items ONLY with clear UK/EMEA implications.
-    Exclude US-only or APAC-only items unless they directly affect UK/EMEA firms.
+    Exclude US-only or APAC-only items unless they directly affect UK/EMEA firms
+    (e.g. a US Fed rate decision with no BoE response or UK transmission mechanism should be excluded).
 
     Return ONLY the blocks below. No markdown. No HTML wrapper tags.
 
@@ -397,10 +459,10 @@ NEWSLETTER_PROMPT = """
     [END]
 
     [BLOCK:KEY_NUMBERS]
-    Exactly 4 cards. Use real numbers from input only — no invented figures.
-    Fill gaps with regulatory deadlines as date metrics (e.g. VAL="18 May", LABEL="FCA deadline").
+    Exactly 4 cards. Prefer real numbers from the input. Where fewer than 4 exist, fill remaining
+    cards with a regulatory deadline as a date metric (e.g. VAL="30 Sep", LABEL="FCA deadline").
+    Never invent figures. URL must exist in the input document.
     CLASS: kn-warn=negative/risk, kn-good=positive/growth, kn-brand=neutral.
-    URL must exist in the input document.
     Format — one card per block, separated by --- on its own line:
     VAL:VALUE|LABEL:short label|SRC:source name|CLASS:kn-[warn|good|brand]
     URL:https://...
@@ -414,7 +476,7 @@ NEWSLETTER_PROMPT = """
     HEAD:Headline — max 12 words
     WHY:Why it matters — max 18 words
     TAKE:Key takeaway — max 18 words
-    CONSULT:Specific consulting workstream this creates — max 18 words
+    CONSULT:Specific consulting workstream this creates — max 18 words (omit line entirely if no genuine angle exists)
     URL:https://...
     SCHEME:Scheme impact (optional — only for scheme stories)
     GEO:UK/EMEA relevance (optional — only for global stories)
@@ -438,16 +500,21 @@ NEWSLETTER_PROMPT = """
     [END]
 
     [BLOCK:TAKEAWAYS]
-    4 cards in a two-column grid. Max 20 words each. One sentence only.
+    4 cards in a two-column Outlook-safe table. Max 20 words each. One sentence only.
     Labels: Risk signal | Regulatory deadline | Tech opportunity | Scheme change | Consulting demand | Macro watch
-    Modifier class: mini-risk | mini-tech | mini-macro | mini-scheme (omit for default blue).
-    Format — use a 2-column table (Outlook-safe), 2 cards per row:
+    Type colour map — inline styles are required; Outlook strips CSS class-based styles:
+      default:     border:#2563eb  bg:#f8faff  label-color:#2563eb
+      mini-risk:   border:#b91c1c  bg:#fef9f9  label-color:#b91c1c
+      mini-tech:   border:#15803d  bg:#f6fef8  label-color:#15803d
+      mini-macro:  border:#7e22ce  bg:#fdf8ff  label-color:#7e22ce
+      mini-scheme: border:#065f46  bg:#f0fdfb  label-color:#065f46
+    Replace [BORDER], [BG], [LABEL-COLOR], [TYPE], [LABEL], [TEXT] with real values:
     <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr valign="top">
-    <td width="50%" style="padding-right:5px;"><div class="mini mini-[type]"><div class="mini-label">LABEL</div><p>TEXT</p></div></td>
-    <td width="50%" style="padding-left:5px;"><div class="mini mini-[type]"><div class="mini-label">LABEL</div><p>TEXT</p></div></td>
+    <td width="50%" style="padding-right:5px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
+    <td width="50%" style="padding-left:5px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
     </tr><tr valign="top">
-    <td style="padding-right:5px;padding-top:10px;"><div class="mini mini-[type]"><div class="mini-label">LABEL</div><p>TEXT</p></div></td>
-    <td style="padding-left:5px;padding-top:10px;"><div class="mini mini-[type]"><div class="mini-label">LABEL</div><p>TEXT</p></div></td>
+    <td style="padding-right:5px;padding-top:10px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
+    <td style="padding-left:5px;padding-top:10px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
     </tr></table>
     [END]
 
@@ -478,9 +545,9 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
             max_output_tokens=OPENAI_MAX_TOKENS,
         )
         ai_text       = resp.output_text
-        usage         = getattr(resp, "usage", None) or {}
-        input_tokens  = getattr(usage, "input_tokens",  None) or usage.get("input_tokens")
-        output_tokens = getattr(usage, "output_tokens", None) or usage.get("output_tokens")
+        usage         = getattr(resp, "usage", None)
+        input_tokens  = getattr(usage, "input_tokens",  None) if usage is not None else None
+        output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
         model_used    = resp.model
         provider_label = f"OpenAI · {model_used}"
 
@@ -502,16 +569,6 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
     # ── TOKEN USAGE + COST ───────────────────────────────────────────────────
     print({"model": model_used, "input_tokens": input_tokens, "output_tokens": output_tokens})
 
-    PRICING = {
-        "gpt-5.6-luna":              (0.20 / 1_000_000,  1.20 / 1_000_000),
-        "gpt-5.6-terra":             (2.00 / 1_000_000, 12.00 / 1_000_000),
-        "gpt-5.5":                   (5.00 / 1_000_000, 30.00 / 1_000_000),
-        "gpt-4o-mini":               (0.15 / 1_000_000,  0.60 / 1_000_000),
-        "gpt-4o":                    (2.50 / 1_000_000, 10.00 / 1_000_000),
-        "claude-sonnet-4-6":         (3.00 / 1_000_000, 15.00 / 1_000_000),
-        "claude-haiku-4-5-20251001": (0.80 / 1_000_000,  4.00 / 1_000_000),
-        "claude-opus-4-6":           (15.0 / 1_000_000, 75.00 / 1_000_000)
-    }
     if input_tokens is not None and output_tokens is not None:
         for key, (in_rate, out_rate) in PRICING.items():
             if key in model_used:
@@ -534,9 +591,9 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
         template = f.read()
 
     mapping = {
-        "TITLE": "Payments Industry Newsletter",
-        "DATE_LINE": escape(date_line),
-        "FOCUS_TITLE": escape(focus_title),
+        "TITLE":        "Payments Industry Newsletter",
+        "DATE_LINE":    escape(date_line),
+        "FOCUS_TITLE":  escape(focus_title),
         "FOCUS_SUBTITLE": escape(focus_subtitle),
         "KEY_NUMBERS":  parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
         "TOP_STORIES":  parse_stories(blocks.get("TOP_STORIES", "")),
@@ -545,245 +602,112 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
         "EVENTS":       blocks.get("EVENTS", '<div class="muted">No upcoming events detected.</div>'),
         "TAKEAWAYS":    blocks.get("TAKEAWAYS", ""),
         "QUICK_LINKS":  blocks.get("QUICK_LINKS", ""),
-        "FOOTER_NOTE": escape("Payments News • Auto-generated") + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {provider_label}</span>',
+        "AI_PROVIDER":  escape(provider_label),
+        "AUTHORS":      AUTHOR_SECTION_HTML,
+        "MAX_WIDTH":    "1080",
+        "FOOTER_NOTE":  escape("Payments News • Auto-generated") + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {provider_label}</span>',
+    }
+
+    return fill_template(template, mapping), blocks, provider_label
+
+# ========================================================================================
+# ── OUTLOOK EMAIL OUTPUT ────────────────────────────────────────────────────────────────
+# Added by Morgan Moloney — Outlook-compatible email rendering.
+# generate_outlook_email_html() reuses the AI blocks from generate_newsletter_html()
+# (no second API call) and injects the author section below.
+# Replace [Job Title] placeholders before sending.
+# ========================================================================================
+
+AUTHOR_SECTION_HTML = """
+<table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff"
+  style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;" role="presentation">
+  <tr><td style="font-family:Arial,Helvetica,sans-serif;">
+    <div style="font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;margin-bottom:16px;">Your curators</div>
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+      <tr valign="middle">
+
+        <!-- Liam Grimwood -->
+        <td width="50%" style="padding-right:16px;">
+          <table cellpadding="0" cellspacing="0" border="0" role="presentation">
+            <tr valign="middle">
+              <td width="64" style="padding-right:12px;">
+                <!--[if !mso]><!-->
+                <div style="width:52px;height:52px;border-radius:50%;background:#3A0CA3;text-align:center;line-height:52px;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;display:inline-block;">LG</div>
+                <!--<![endif]-->
+                <!--[if mso]><table cellpadding="0" cellspacing="0" border="0" width="52" height="52"><tr><td width="52" height="52" align="center" valign="middle" bgcolor="#3A0CA3" style="font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">LG</td></tr></table><![endif]-->
+              </td>
+              <td>
+                <div style="font-size:14px;font-weight:700;color:#111827;font-family:Arial,Helvetica,sans-serif;">Liam Grimwood</div>
+                <div style="font-size:12px;color:#4b5563;margin-top:2px;font-family:Arial,Helvetica,sans-serif;">Engineer &middot; Manchester Payments Team</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+
+        <!-- Morgan Moloney -->
+        <td width="50%">
+          <table cellpadding="0" cellspacing="0" border="0" role="presentation">
+            <tr valign="middle">
+              <td width="64" style="padding-right:12px;">
+                <!--[if !mso]><!-->
+                <div style="width:52px;height:52px;border-radius:50%;background:#7F16FF;text-align:center;line-height:52px;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;display:inline-block;">MM</div>
+                <!--<![endif]-->
+                <!--[if mso]><table cellpadding="0" cellspacing="0" border="0" width="52" height="52"><tr><td width="52" height="52" align="center" valign="middle" bgcolor="#7F16FF" style="font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">MM</td></tr></table><![endif]-->
+              </td>
+              <td>
+                <div style="font-size:14px;font-weight:700;color:#111827;font-family:Arial,Helvetica,sans-serif;">Morgan Moloney</div>
+                <div style="font-size:12px;color:#4b5563;margin-top:2px;font-family:Arial,Helvetica,sans-serif;">Engineer &middot; Manchester Payments Team</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+
+      </tr>
+    </table>
+  </td></tr>
+</table>
+"""
+
+def generate_outlook_email_html(blocks: dict, articles: list, provider_label: str, template_path: str = "TEMPLATE.html") -> str:
+    """
+    Renders an Outlook-compatible email from pre-computed AI blocks.
+    Call this after generate_newsletter_html() — it reuses the same blocks
+    so no second API call is made.
+    """
+    focus_title, focus_subtitle = parse_focus(blocks.get("FOCUS", ""))
+    if not focus_title:
+        focus_title = "Payments signals"
+    if not focus_subtitle:
+        focus_subtitle = "Regulation • Risk • Rails"
+
+    today = datetime.now().strftime("%d %b %Y")
+    date_line = f"{today} • {len(articles)} items scanned"
+
+    with open(template_path, "r", encoding="utf-8") as f:
+        template = f.read()
+
+    mapping = {
+        "TITLE":        "Payments Industry Newsletter",
+        "DATE_LINE":    escape(date_line),
+        "FOCUS_TITLE":  escape(focus_title),
+        "FOCUS_SUBTITLE": escape(focus_subtitle),
+        "KEY_NUMBERS":  parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
+        "TOP_STORIES":  parse_stories(blocks.get("TOP_STORIES", "")),
+        "RISK":         parse_stories(blocks.get("RISK", "")),
+        "MACRO":        parse_stories(blocks.get("MACRO", "")),
+        "EVENTS":       blocks.get("EVENTS", '<div class="muted">No upcoming events detected.</div>'),
+        "TAKEAWAYS":    blocks.get("TAKEAWAYS", ""),
+        "QUICK_LINKS":  blocks.get("QUICK_LINKS", ""),
+        "AI_PROVIDER":  escape(provider_label),
+        "AUTHORS":      AUTHOR_SECTION_HTML,
+        "MAX_WIDTH":    "680",
+        "FOOTER_NOTE":  escape("Payments News • Auto-generated") + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {escape(provider_label)}</span>',
     }
 
     return fill_template(template, mapping)
 
-def wrap_in_standard_template(inner_html: str, articles_count: int) -> str:
-    now = datetime.now().strftime("%A, %d %B %Y • %H:%M")
-    return f"""<!doctype html>
-    <html>
-    <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <style>
-        body {{ margin:0; padding:0; background:#f5f7fb; font-family: Arial, sans-serif; color:#111827; }}
-        .wrap {{ max-width: 980px; margin: 0 auto; padding: 24px; }}
-        .card {{ background:#fff; border:1px solid #e5e7eb; border-radius:14px; box-shadow: 0 6px 20px rgba(17,24,39,.06); }}
-        .pad {{ padding: 20px 22px; }}
-        .hero {{ display:flex; align-items:center; justify-content:space-between; gap:16px; }}
-        .title {{ font-size: 22px; margin:0; }}
-        .sub {{ margin:6px 0 0; color:#6b7280; font-size: 13px; }}
-        .pills {{ margin-top: 14px; display:flex; flex-wrap:wrap; gap:8px; }}
-        .pill {{ display:inline-block; padding:6px 10px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:12px; border:1px solid #e0e7ff; }}
-        h2 {{ margin: 18px 0 10px; font-size: 16px; }}
-        h3 {{ margin: 10px 0 8px; font-size: 14px; }}
-        .item {{ padding: 14px; border:1px solid #eef2f7; border-radius: 12px; background:#fbfdff; margin: 12px 0; }}
-        .meta {{ display:flex; gap:8px; align-items:center; font-size: 12px; }}
-        .src {{ font-weight:700; color:#2563eb; }}
-        .tag {{ padding:3px 8px; border-radius:999px; background:#f3f4f6; border:1px solid #e5e7eb; color:#374151; }}
-        ul {{ margin: 8px 0 0 18px; padding:0; }}
-        li {{ margin: 6px 0; color:#374151; font-size: 13px; line-height: 1.45; }}
-        .btn {{ display:inline-block; padding:8px 12px; border-radius: 10px; background:#2563eb; color:#fff; text-decoration:none; font-size: 12px; }}
-        .muted {{ color:#6b7280; font-size: 13px; }}
-        table {{ width:100%; border-collapse: collapse; margin-top: 8px; }}
-        th, td {{ border-bottom: 1px solid #eef2f7; padding: 10px 8px; text-align:left; font-size: 13px; }}
-        th {{ color:#6b7280; font-weight:600; }}
-        .footer {{ margin-top:16px; color:#9ca3af; font-size: 12px; text-align:center; }}
-    </style>
-    </head>
-    <body>
-    <div class="wrap">
-        <div class="card pad">
-        <div class="hero">
-            <div>
-            <h1 class="title">Payments Industry Newsletter</h1>
-            <p class="sub">{now} • {articles_count} items scanned</p>
-            </div>
-        </div>
+# ────────────────────────────────────────────────────────────────────────────────────────
 
-        <!-- GPT content goes here -->
-        {inner_html}
-
-        <div class="footer">Payments News Bot • MVP</div>
-        </div>
-    </div>
-    </body>
-    </html>"""
-
-# ========================================================================================
-
-########## To-Do
-
-def create_email_html(articles):
-    """
-    Create a formatted HTML email from articles
-    """
-    print("\n" + "="*70)
-    print("STEP 2: CREATING EMAIL HTML")
-    print("="*70)
-    
-    # Remove HTML tags from summaries
-    def clean_html(text):
-        return re.sub('<[^<]+?>', '', text)
-    
-    # Build the HTML
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                line-height: 1.6;
-                color: #333;
-                max-width: 800px;
-                margin: 0 auto;
-                padding: 20px;
-                background-color: #f5f5f5;
-            }}
-            .container {{
-                background-color: white;
-                padding: 30px;
-                border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }}
-            h1 {{
-                color: #1a1a1a;
-                border-bottom: 3px solid #0066cc;
-                padding-bottom: 10px;
-                margin-top: 0;
-            }}
-            .date {{
-                color: #666;
-                font-size: 0.95em;
-                margin-bottom: 30px;
-            }}
-            .stats {{
-                background: #e8f4ff;
-                padding: 15px;
-                border-radius: 4px;
-                margin-bottom: 20px;
-                font-size: 0.9em;
-                color: #555;
-            }}
-            .article {{
-                margin-bottom: 25px;
-                padding: 20px;
-                background: #f9f9f9;
-                border-left: 4px solid #0066cc;
-                border-radius: 4px;
-            }}
-            .article-source {{
-                color: #0066cc;
-                font-size: 0.85em;
-                font-weight: bold;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }}
-            .article-title {{
-                margin: 8px 0;
-                color: #1a1a1a;
-                font-size: 1.2em;
-                font-weight: 600;
-            }}
-            .article-date {{
-                color: #999;
-                font-size: 0.85em;
-                margin-bottom: 10px;
-            }}
-            .article-summary {{
-                margin: 12px 0;
-                color: #555;
-                line-height: 1.6;
-            }}
-            .read-more {{
-                display: inline-block;
-                margin-top: 10px;
-                padding: 8px 16px;
-                background-color: #0066cc;
-                color: white;
-                text-decoration: none;
-                border-radius: 4px;
-                font-size: 0.9em;
-            }}
-            .footer {{
-                margin-top: 40px;
-                padding-top: 20px;
-                border-top: 2px solid #eee;
-                text-align: center;
-                color: #999;
-                font-size: 0.85em;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>📰 Payments Industry News Digest</h1>
-            <div class="date">{datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")}</div>
-            
-            <div class="stats">
-                📊 <strong>{len(articles)} articles</strong> from {len(RSS_FEEDS)} sources
-            </div>
-    """
-    
-    # Add each article
-    for article in articles:
-        summary = clean_html(article['summary'])
-        
-        # Truncate if too long
-        if len(summary) > 400:
-            summary = summary[:400] + "..."
-        
-        html += f"""
-            <div class="article">
-                <div class="article-source">{article['source']}</div>
-                <div class="article-title">{article['title']}</div>
-                <div class="article-date">📅 {article['published']}</div>
-                <div class="article-summary">{summary}</div>
-                <a href="{article['link']}" class="read-more">Read Full Article →</a>
-            </div>
-        """
-    
-    # Close HTML
-    html += f"""
-            <div class="footer">
-                <p><strong>Payments News Bot</strong> - MVP Version</p>
-                <p>Automatically generated at {datetime.now().strftime("%I:%M %p")}</p>
-                <p style="margin-top: 15px; font-size: 0.8em;">
-                    🤖 Next: Add AI summarization with Claude
-                </p>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    
-    print(f"✓ Email HTML created ({len(html)} characters)")
-    
-    return html
-
-def print_email_preview(html_content, articles):
-    """
-    Print a text preview of the email to console
-    """
-    print("\n" + "="*70)
-    print("STEP 3: EMAIL PREVIEW")
-    print("="*70)
-    
-    print(f"\n📧 SUBJECT: Payments News Digest - {datetime.now().strftime('%b %d, %Y')}")
-    print("\n" + "-"*70)
-    print(f"PAYMENTS INDUSTRY NEWS DIGEST")
-    print(f"{datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}")
-    print(f"\n📊 {len(articles)} articles from {len(RSS_FEEDS)} sources")
-    print("-"*70)
-    
-    for i, article in enumerate(articles, 1):
-        print(f"\n[{i}] {article['source'].upper()}")
-        print(f"Title: {article['title']}")
-        print(f"Date: {article['published']}")
-        print(f"Link: {article['link']}")
-        
-        # Clean and truncate summary
-        summary = re.sub('<[^<]+?>', '', article['summary'])
-        if len(summary) > 200:
-            summary = summary[:200] + "..."
-        print(f"Summary: {summary}")
-        print("-"*70)
-    
-    print(f"\n✅ Full HTML email is ready ({len(html_content)} characters)")
 
 # ========================================================================================
 
@@ -802,22 +726,28 @@ if __name__ == "__main__":
     if not articles:
         print("\n❌ No articles found!")
     else:
-        # Step 2: Create email HTML
-        email_html = generate_newsletter_html(client, articles, template_path="TEMPLATE.html")
-        
-        # Step 3: Print preview to console
-        # print_email_preview(email_html, articles)
-        
-        # Optional: Save HTML file
+        # Step 2: Generate browser preview (also runs the AI call)
+        browser_html, ai_blocks, provider_label = generate_newsletter_html(client, articles, template_path="TEMPLATE.html")
+
+        # Step 3: Generate Outlook email (reuses AI blocks — no second API call)
+        outlook_html = generate_outlook_email_html(ai_blocks, articles, provider_label, template_path="TEMPLATE.html")
+
+        # Save both outputs
         output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeneratedReports")
         os.makedirs(output_dir, exist_ok=True)
-        filename = f"PaymentsNewsReport_{datetime.now().strftime('%d-%m-%y_%H-%M')}.html"
-        filepath = os.path.join(output_dir, filename)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(email_html)
+        timestamp = datetime.now().strftime('%d-%m-%y_%H-%M')
 
-        print(f"\n💾 Full HTML saved to: GeneratedReports/{filename}")
-        print(f"   Open this file in your browser to see the styled version!")
+        browser_file = f"PaymentsNewsReport_{timestamp}.html"
+        with open(os.path.join(output_dir, browser_file), 'w', encoding='utf-8') as f:
+            f.write(browser_html)
+
+        email_file = f"PaymentsEmail_{timestamp}.html"
+        with open(os.path.join(output_dir, email_file), 'w', encoding='utf-8') as f:
+            f.write(outlook_html)
+
+        print(f"\n💾 Browser preview : GeneratedReports/{browser_file}")
+        print(f"📧 Outlook email   : GeneratedReports/{email_file}")
+        print(f"   Open the browser file to check layout; use the email file for sending.")
 
         print("\n✅ SUCCESS!")
 
