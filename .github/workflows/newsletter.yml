@@ -24,7 +24,15 @@ jobs:
 
       - name: Run NewsBot
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY:       ${{ secrets.OPENAI_API_KEY }}
+          # Option 1: Office 365 basic SMTP auth
+          SMTP_USER:            ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:        ${{ secrets.SMTP_PASSWORD }}
+          # Option 2: Microsoft Graph API (preferred for MFA-enabled accounts)
+          AZURE_TENANT_ID:      ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID:      ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET:  ${{ secrets.AZURE_CLIENT_SECRET }}
+          MAIL_SENDER:          ${{ secrets.MAIL_SENDER }}
         run: python NewsBot.py
 
       - name: Upload newsletter output

@@ -1,6 +1,7 @@
 import sys
 import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 import feedparser
 from datetime import datetime
 import re
@@ -19,18 +20,23 @@ LLM_PROVIDER = "openai"
 
 # Model names (change here to upgrade/downgrade)
 # OPENAI_MODEL    = "gpt-5.5"               # TEMP: trialling gpt-5.5 — better capability + token efficiency
-OPENAI_MODEL    = "gpt-5.6-terra"               # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
+OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
 # OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
 # OPENAI_MODEL  = "gpt-4o-mini"           # previous model — uncomment to revert (~40x cheaper)
-ANTHROPIC_MODEL = "claude-sonnet-4-6"     # alt: "claude-haiku-4-5-20251001", "claude-opus-4-6"
+ANTHROPIC_MODEL = (
+    "claude-sonnet-4-6"  # alt: "claude-haiku-4-5-20251001", "claude-opus-4-6"
+)
 
 # Max output tokens per provider
 # gpt-5.5 has improved token efficiency so real usage may be lower than gpt-4o-mini baseline (~1,800 tokens)
-OPENAI_MAX_TOKENS    = 8000
-ANTHROPIC_MAX_TOKENS = 4500   # raised to accommodate KEY_NUMBERS block and enhanced prompts
+OPENAI_MAX_TOKENS = 8000
+ANTHROPIC_MAX_TOKENS = (
+    4500  # raised to accommodate KEY_NUMBERS block and enhanced prompts
+)
 
 if LLM_PROVIDER == "openai":
     from openai import OpenAI
+
     _key = os.environ.get("OPENAI_API_KEY")
     if not _key:
         raise EnvironmentError("OPENAI_API_KEY not found. Add it to your .env file.")
@@ -38,63 +44,86 @@ if LLM_PROVIDER == "openai":
 
 elif LLM_PROVIDER == "anthropic":
     import anthropic as anthropic_sdk
+
     _key = os.environ.get("ANTHROPIC_API_KEY")
     if not _key:
         raise EnvironmentError("ANTHROPIC_API_KEY not found. Add it to your .env file.")
     client = anthropic_sdk.Anthropic(api_key=_key)
 
 else:
-    raise ValueError(f"Unknown LLM_PROVIDER: '{LLM_PROVIDER}'. Use 'openai' or 'anthropic'.")
+    raise ValueError(
+        f"Unknown LLM_PROVIDER: '{LLM_PROVIDER}'. Use 'openai' or 'anthropic'."
+    )
 # ────────────────────────────────────────────────────────────────────────────────────────
 
 # Cost per token by model (input_rate, output_rate) — update when pricing changes
 PRICING = {
-    "gpt-5.6-luna":              (0.20 / 1_000_000,  1.20 / 1_000_000),
-    "gpt-5.6-terra":             (2.00 / 1_000_000, 12.00 / 1_000_000),
-    "gpt-5.5":                   (5.00 / 1_000_000, 30.00 / 1_000_000),
-    "gpt-4o-mini":               (0.15 / 1_000_000,  0.60 / 1_000_000),
-    "gpt-4o":                    (2.50 / 1_000_000, 10.00 / 1_000_000),
-    "claude-sonnet-4-6":         (3.00 / 1_000_000, 15.00 / 1_000_000),
-    "claude-haiku-4-5-20251001": (0.80 / 1_000_000,  4.00 / 1_000_000),
-    "claude-opus-4-6":           (15.0 / 1_000_000, 75.00 / 1_000_000),
+    "gpt-5.6-luna": (0.20 / 1_000_000, 1.20 / 1_000_000),
+    "gpt-5.6-terra": (2.00 / 1_000_000, 12.00 / 1_000_000),
+    "gpt-5.5": (5.00 / 1_000_000, 30.00 / 1_000_000),
+    "gpt-4o-mini": (0.15 / 1_000_000, 0.60 / 1_000_000),
+    "gpt-4o": (2.50 / 1_000_000, 10.00 / 1_000_000),
+    "claude-sonnet-4-6": (3.00 / 1_000_000, 15.00 / 1_000_000),
+    "claude-haiku-4-5-20251001": (0.80 / 1_000_000, 4.00 / 1_000_000),
+    "claude-opus-4-6": (15.0 / 1_000_000, 75.00 / 1_000_000),
 }
 
 # Known regulatory events to always surface in the EVENTS section.
 # Keep this list current — the AI will drop past dates automatically via the prompt rule.
 KNOWN_EVENTS = [
-    {"date": "30 Sep 2026", "event": "UK cryptoasset authorisation gateway opens",    "type": "reg",   "url": "https://www.fca.org.uk/", "relevance": "High"},
-    {"date": "Nov 2026",    "event": "STEP2 DKK go-live (EBA Clearing)",              "type": "infra", "url": "https://www.ebaclearing.eu/", "relevance": "High"},
-    {"date": "1 Jan 2027",  "event": "Basel 3.1 UK go-live",                          "type": "reg",   "url": "https://www.bankofengland.co.uk/", "relevance": "High"},
-    {"date": "25 Oct 2027", "event": "UK cryptoasset full regime enters force",       "type": "reg",   "url": "https://www.fca.org.uk/", "relevance": "High"},
+    {
+        "date": "30 Sep 2026",
+        "event": "UK cryptoasset authorisation gateway opens",
+        "type": "reg",
+        "url": "https://www.fca.org.uk/",
+        "relevance": "High",
+    },
+    {
+        "date": "Nov 2026",
+        "event": "STEP2 DKK go-live (EBA Clearing)",
+        "type": "infra",
+        "url": "https://www.ebaclearing.eu/",
+        "relevance": "High",
+    },
+    {
+        "date": "1 Jan 2027",
+        "event": "Basel 3.1 UK go-live",
+        "type": "reg",
+        "url": "https://www.bankofengland.co.uk/",
+        "relevance": "High",
+    },
+    {
+        "date": "25 Oct 2027",
+        "event": "UK cryptoasset full regime enters force",
+        "type": "reg",
+        "url": "https://www.fca.org.uk/",
+        "relevance": "High",
+    },
 ]
 
 RSS_FEEDS = {
     # ===== CENTRAL BANKS & REGULATORS =====
-    'Bank of England - News':                  'https://www.bankofengland.co.uk/rss/news',
-    'Bank of England - Publications':          'https://www.bankofengland.co.uk/rss/publications',
-    'Bank of England - Prudential Regulation': 'https://www.bankofengland.co.uk/rss/prudential-regulation-publications',
-    'FCA - News':                              'https://www.fca.org.uk/news/rss.xml',
-    'HM Treasury':                             'https://www.gov.uk/government/organisations/hm-treasury.atom',
-    'ECB - Press Releases':                    'https://www.ecb.europa.eu/rss/press.html',
-    'European Banking Authority':              'https://www.eba.europa.eu/rss.xml',
-    'Financial Stability Board':               'https://www.fsb.org/feed/',
-
+    "Bank of England - News": "https://www.bankofengland.co.uk/rss/news",
+    "Bank of England - Publications": "https://www.bankofengland.co.uk/rss/publications",
+    "Bank of England - Prudential Regulation": "https://www.bankofengland.co.uk/rss/prudential-regulation-publications",
+    "FCA - News": "https://www.fca.org.uk/news/rss.xml",
+    "HM Treasury": "https://www.gov.uk/government/organisations/hm-treasury.atom",
+    "ECB - Press Releases": "https://www.ecb.europa.eu/rss/press.html",
+    "European Banking Authority": "https://www.eba.europa.eu/rss.xml",
+    "Financial Stability Board": "https://www.fsb.org/feed/",
     # ===== PAYMENTS INDUSTRY PUBLICATIONS =====
-    'PaymentsSource':                          'https://www.americanbanker.com/feed?rss=true',
-    'PYMNTS':                                  'https://www.pymnts.com/feed/',
-    'Finextra - Payments':                     'https://www.finextra.com/rss/channel.aspx?channel=payments',
-    'The Payments Association':                'https://www.thepaymentsassociation.org/feed/',
-    'Payments Dive':                           'https://www.paymentsdive.com/feeds/news/',
-
+    "PaymentsSource": "https://www.americanbanker.com/feed?rss=true",
+    "PYMNTS": "https://www.pymnts.com/feed/",
+    "Finextra - Payments": "https://www.finextra.com/rss/channel.aspx?channel=payments",
+    "The Payments Association": "https://www.thepaymentsassociation.org/feed/",
+    "Payments Dive": "https://www.paymentsdive.com/feeds/news/",
     # ===== UK FINANCIAL SERVICES =====
-    'UK Finance':                              'https://www.ukfinance.org.uk/rss.xml',
-
+    "UK Finance": "https://www.ukfinance.org.uk/rss.xml",
     # ===== INFRASTRUCTURE & NETWORKS =====
-    'EBA Clearing':                            'https://www.ebaclearing.eu/feed/',
-
+    "EBA Clearing": "https://www.ebaclearing.eu/feed/",
     # ===== GENERAL FINANCIAL NEWS =====
-    'Financial Times - Payments':              'https://www.ft.com/payments?format=rss',
-    'Sky News - Business':                     'https://feeds.skynews.com/feeds/rss/business.xml',
+    "Financial Times - Payments": "https://www.ft.com/payments?format=rss",
+    "Sky News - Business": "https://feeds.skynews.com/feeds/rss/business.xml",
 }
 
 # Inactive feeds (kept for reference):
@@ -105,14 +134,15 @@ articles_per_feed = 7
 
 # ========================================================================================
 
+
 def fetch_news():
     """
     Fetch news articles from all RSS feeds
     """
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("STEP 1: FETCHING NEWS FROM RSS FEEDS")
-    print("="*70)
+    print("=" * 70)
 
     allArticles = []
 
@@ -126,34 +156,43 @@ def fetch_news():
             # Fall back to a requests pre-fetch only for SSL cert failures, where
             # feedparser's built-in urllib doesn't expose ssl_verify.
             feed = feedparser.parse(feed_url)
-            if feed.bozo and isinstance(getattr(feed, 'bozo_exception', None), Exception) and 'SSL' in str(feed.bozo_exception):
+            if (
+                feed.bozo
+                and isinstance(getattr(feed, "bozo_exception", None), Exception)
+                and "SSL" in str(feed.bozo_exception)
+            ):
                 print(f"   ⚠️  SSL cert error — retrying without verification")
                 raw = requests.get(
-                    feed_url, timeout=20,
+                    feed_url,
+                    timeout=20,
                     headers={"User-Agent": "Mozilla/5.0"},
-                    verify=False
+                    verify=False,
                 )
                 feed = feedparser.parse(raw.content)
 
             # Check if feed loaded successfully
             if feed.bozo and not feed.entries:
-                print(f"   ⚠️  Warning: Feed may have issues ({getattr(feed, 'bozo_exception', '')})")
-            
+                print(
+                    f"   ⚠️  Warning: Feed may have issues ({getattr(feed, 'bozo_exception', '')})"
+                )
+
             # Extract articles
             article_count = 0
             for entry in feed.entries[:articles_per_feed]:
                 article = {
-                    'source': source_name,
-                    'title': entry.get('title', 'No title'),
-                    'link': entry.get('link', ''),
-                    'published': entry.get('published', 'No date'),
-                    'summary': entry.get('summary', entry.get('description', 'No summary'))
+                    "source": source_name,
+                    "title": entry.get("title", "No title"),
+                    "link": entry.get("link", ""),
+                    "published": entry.get("published", "No date"),
+                    "summary": entry.get(
+                        "summary", entry.get("description", "No summary")
+                    ),
                 }
                 allArticles.append(article)
                 article_count += 1
-            
+
             print(f"   ✓ Got {article_count} articles")
-            
+
         except Exception as e:
             print(f"   ✗ Error: {e}")
             continue
@@ -161,13 +200,12 @@ def fetch_news():
     print(f"\n{'='*70}")
     print(f"✓ TOTAL ARTICLES COLLECTED: {len(allArticles)}")
     print(f"{'='*70}")
-    
+
     return allArticles
 
+
 def fetch_press_page(url, source_name, max_items=5):
-    headers = {
-        "User-Agent": "PaymentsNewsBot/1.0"
-    }
+    headers = {"User-Agent": "PaymentsNewsBot/1.0"}
     r = requests.get(url, headers=headers, timeout=25)
     r.raise_for_status()
 
@@ -192,17 +230,20 @@ def fetch_press_page(url, source_name, max_items=5):
         if p:
             summary = p.get_text(strip=True)
 
-        items.append({
-            "source": source_name,
-            "title": title,
-            "link": link or url,
-            "published": "Press release",
-            "summary": summary,
-            "region": "Global (UK/EMEA relevant)",
-            "scheme": source_name
-        })
+        items.append(
+            {
+                "source": source_name,
+                "title": title,
+                "link": link or url,
+                "published": "Press release",
+                "summary": summary,
+                "region": "Global (UK/EMEA relevant)",
+                "scheme": source_name,
+            }
+        )
 
     return items
+
 
 def fetch_scheme_press():
     all_items = []
@@ -222,7 +263,9 @@ def fetch_scheme_press():
 
     return all_items
 
+
 # ========================================================================================
+
 
 def build_ai_input_document(articles):
     """Turn RSS articles into a compact, model-friendly document."""
@@ -237,7 +280,7 @@ def build_ai_input_document(articles):
 
     for i, article in enumerate(articles, 1):
         # Clean summary (RSS summaries can be HTML)
-        summary = re.sub(r'<[^>]+?>', '', article.get("summary", "")).strip()
+        summary = re.sub(r"<[^>]+?>", "", article.get("summary", "")).strip()
         # Keep it bounded
         summary = summary[:3000]
 
@@ -257,25 +300,26 @@ def build_ai_input_document(articles):
 
 # ========================================================================================
 
+
 def extract_blocks(text: str) -> dict:
     blocks = {}
     pattern = re.compile(
-        r"\[(?:BLOCK|BODY):(?P<name>[A-Z_]+)\]\s*(?P<body>.*?)\s*\[END\]",
-        re.DOTALL
+        r"\[(?:BLOCK|BODY):(?P<name>[A-Z_]+)\]\s*(?P<body>.*?)\s*\[END\]", re.DOTALL
     )
     for m in pattern.finditer(text):
         blocks[m.group("name")] = m.group("body").strip()
     return blocks
 
+
 def parse_stories(block_text: str) -> str:
     FONT = "font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;"
     TAG_INLINE = {
-        "tag-risk":       "background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;",
+        "tag-risk": "background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;",
         "tag-regulatory": "background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;",
-        "tag-tech":       "background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;",
-        "tag-infra":      "background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;",
-        "tag-macro":      "background:#faf5ff;color:#7e22ce;border:1px solid #e9d5ff;",
-        "tag-scheme":     "background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;",
+        "tag-tech": "background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;",
+        "tag-infra": "background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;",
+        "tag-macro": "background:#faf5ff;color:#7e22ce;border:1px solid #e9d5ff;",
+        "tag-scheme": "background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;",
     }
 
     html_parts = []
@@ -300,32 +344,35 @@ def parse_stories(block_text: str) -> str:
 
         src_tag = fields.get("SRC", "")
         tag_raw = fields.get("TAG", "")
-        label   = fields.get("LABEL", "")
-        head    = fields.get("HEAD", "")
-        why     = fields.get("WHY", "")
-        take    = fields.get("TAKE", "")
+        label = fields.get("LABEL", "")
+        head = fields.get("HEAD", "")
+        why = fields.get("WHY", "")
+        take = fields.get("TAKE", "")
         consult = fields.get("CONSULT", "")
-        url     = fields.get("URL", "#")
-        scheme  = fields.get("SCHEME", "")
-        geo     = fields.get("GEO", "")
+        url = fields.get("URL", "#")
+        scheme = fields.get("SCHEME", "")
+        geo = fields.get("GEO", "")
 
-        tag_style = TAG_INLINE.get(tag_raw, "background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;")
+        tag_style = TAG_INLINE.get(
+            tag_raw, "background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;"
+        )
 
         extra_bullets = ""
         if scheme:
             extra_bullets += (
                 f'<li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}">'
-                f'<b>Scheme impact:</b> {escape(scheme)}</li>\n'
+                f"<b>Scheme impact:</b> {escape(scheme)}</li>\n"
             )
         if geo:
             extra_bullets += (
                 f'<li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}">'
-                f'<b>UK/EMEA relevance:</b> {escape(geo)}</li>\n'
+                f"<b>UK/EMEA relevance:</b> {escape(geo)}</li>\n"
             )
 
         consult_li = (
             f'    <li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}"><b>Opportunity:</b> {escape(consult)}</li>\n'
-            if consult else ""
+            if consult
+            else ""
         )
 
         html_parts.append(
@@ -339,32 +386,33 @@ def parse_stories(block_text: str) -> str:
             f'    <td style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#4b5563;{FONT}">{escape(src_tag)}</td>\n'
             f'    <td align="right">'
             f'<span class="tag {escape(tag_raw)}" style="font-size:11px;font-weight:600;border-radius:999px;padding:4px 9px;{tag_style}{FONT}">'
-            f'{escape(label)}</span></td>\n'
-            f'  </tr>\n'
-            f'  </table>\n'
+            f"{escape(label)}</span></td>\n"
+            f"  </tr>\n"
+            f"  </table>\n"
             # Headline
             f'  <h3 style="margin:8px 0 6px;font-size:14px;color:#111827;{FONT}">{escape(head)}</h3>\n'
             # Bullets
             f'  <ul style="margin:10px 0 0;padding-left:18px;color:#374151;">\n'
             f'    <li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}"><b>Why it matters:</b> {escape(why)}</li>\n'
             f'    <li style="margin:4px 0;font-size:13px;line-height:1.45;{FONT}"><b>Key takeaway:</b> {escape(take)}</li>\n'
-            f'{consult_li}'
-            f'{extra_bullets}'
-            f'  </ul>\n'
+            f"{consult_li}"
+            f"{extra_bullets}"
+            f"  </ul>\n"
             # Filled blue button — renders as a proper CTA in Outlook
             f'  <a href="{url}" class="btn" style="display:inline-block;margin-top:10px;padding:8px 14px;border-radius:10px;'
             f'background:#2563eb;font-size:12px;color:#ffffff;font-weight:600;text-decoration:none;{FONT}"'
             f' aria-label="Read more: {escape(head)}">Read &#8594;</a>\n'
-            f'</td></tr>\n'
-            f'</table>'
+            f"</td></tr>\n"
+            f"</table>"
         )
     return "\n".join(html_parts)
+
 
 def parse_key_numbers(block_text: str) -> str:
     """Convert compact key-numbers format to an Outlook-compatible 4-cell table."""
     NUM_COLORS = {
-        "kn-warn":  "#c2410c",
-        "kn-good":  "#15803d",
+        "kn-warn": "#c2410c",
+        "kn-good": "#15803d",
         "kn-brand": "#2563eb",
     }
     cards = []
@@ -387,11 +435,11 @@ def parse_key_numbers(block_text: str) -> str:
                 key, _, val = line.partition(":")
                 fields[key.strip()] = val.strip()
 
-        val       = escape(fields.get("VAL", "—"))
-        label     = escape(fields.get("LABEL", ""))
-        src       = escape(fields.get("SRC", ""))
-        cls       = fields.get("CLASS", "kn-brand")
-        url       = fields.get("URL", "#")
+        val = escape(fields.get("VAL", "—"))
+        label = escape(fields.get("LABEL", ""))
+        src = escape(fields.get("SRC", ""))
+        cls = fields.get("CLASS", "kn-brand")
+        url = fields.get("URL", "#")
         num_color = NUM_COLORS.get(cls, "#2563eb")
         cards.append((val, label, src, num_color, url))
 
@@ -408,15 +456,16 @@ def parse_key_numbers(block_text: str) -> str:
             f'<div style="font-size:24px;font-weight:800;color:{num_color};line-height:1;margin-bottom:3px;">{val}</div>'
             f'<div style="font-size:12px;color:#6b7280;line-height:1.3;">{label}</div>'
             f'<div style="font-size:10px;color:#6b7280;margin-top:5px;font-style:italic;">{src}</div>'
-            f'</a>'
-            f'</td>'
+            f"</a>"
+            f"</td>"
         )
 
     return (
         '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
         + "".join(tds)
-        + '</tr></table>'
+        + "</tr></table>"
     )
+
 
 def parse_focus(block: str) -> tuple[str, str]:
     # expects:
@@ -432,11 +481,13 @@ def parse_focus(block: str) -> tuple[str, str]:
             subtitle = line.split("=", 1)[1].strip()
     return title, subtitle
 
+
 def fill_template(template_html: str, mapping: dict) -> str:
     out = template_html
     for k, v in mapping.items():
         out = out.replace(f"{{{{{k}}}}}", v)
     return out
+
 
 NEWSLETTER_PROMPT = """
     Be concise and information-dense. Do not over-explain.
@@ -529,6 +580,7 @@ NEWSLETTER_PROMPT = """
     Tag classes: tag-risk=fraud/crime/cyber | tag-regulatory=FCA/PRA/BoE/EU | tag-tech=ISO20022/rails/AI/cloud | tag-infra=RTGS/CHAPS/network | tag-macro=rates/M&A/macro | tag-scheme=Visa/MC/SWIFT/SEPA/FPS
     """
 
+
 def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
     document = build_ai_input_document(articles)
     today_str = datetime.now().strftime("%d %b %Y")
@@ -539,16 +591,29 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
         resp = client.responses.create(
             model=OPENAI_MODEL,
             input=[
-                {"role": "system", "content": "You are an expert payments news editor producing HTML fragments for a fixed email template."},
-                {"role": "user", "content": prompt + "\n\n---BEGIN DOCUMENT---\n" + document + "\n---END DOCUMENT---"}
+                {
+                    "role": "system",
+                    "content": "You are an expert payments news editor producing HTML fragments for a fixed email template.",
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                    + "\n\n---BEGIN DOCUMENT---\n"
+                    + document
+                    + "\n---END DOCUMENT---",
+                },
             ],
             max_output_tokens=OPENAI_MAX_TOKENS,
         )
-        ai_text       = resp.output_text
-        usage         = getattr(resp, "usage", None)
-        input_tokens  = getattr(usage, "input_tokens",  None) if usage is not None else None
-        output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
-        model_used    = resp.model
+        ai_text = resp.output_text
+        usage = getattr(resp, "usage", None)
+        input_tokens = (
+            getattr(usage, "input_tokens", None) if usage is not None else None
+        )
+        output_tokens = (
+            getattr(usage, "output_tokens", None) if usage is not None else None
+        )
+        model_used = resp.model
         provider_label = f"OpenAI · {model_used}"
 
     elif LLM_PROVIDER == "anthropic":
@@ -557,17 +622,29 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
             max_tokens=ANTHROPIC_MAX_TOKENS,
             system="You are an expert payments news editor producing HTML fragments for a fixed email template.",
             messages=[
-                {"role": "user", "content": prompt + "\n\n---BEGIN DOCUMENT---\n" + document + "\n---END DOCUMENT---"}
+                {
+                    "role": "user",
+                    "content": prompt
+                    + "\n\n---BEGIN DOCUMENT---\n"
+                    + document
+                    + "\n---END DOCUMENT---",
+                }
             ],
         )
-        ai_text        = resp.content[0].text
-        input_tokens   = resp.usage.input_tokens
-        output_tokens  = resp.usage.output_tokens
-        model_used     = resp.model
+        ai_text = resp.content[0].text
+        input_tokens = resp.usage.input_tokens
+        output_tokens = resp.usage.output_tokens
+        model_used = resp.model
         provider_label = f"Anthropic · {model_used}"
 
     # ── TOKEN USAGE + COST ───────────────────────────────────────────────────
-    print({"model": model_used, "input_tokens": input_tokens, "output_tokens": output_tokens})
+    print(
+        {
+            "model": model_used,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+    )
 
     if input_tokens is not None and output_tokens is not None:
         for key, (in_rate, out_rate) in PRICING.items():
@@ -591,24 +668,28 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
         template = f.read()
 
     mapping = {
-        "TITLE":        "Payments Industry Newsletter",
-        "DATE_LINE":    escape(date_line),
-        "FOCUS_TITLE":  escape(focus_title),
+        "TITLE": "Payments Industry Newsletter",
+        "DATE_LINE": escape(date_line),
+        "FOCUS_TITLE": escape(focus_title),
         "FOCUS_SUBTITLE": escape(focus_subtitle),
-        "KEY_NUMBERS":  parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
-        "TOP_STORIES":  parse_stories(blocks.get("TOP_STORIES", "")),
-        "RISK":         parse_stories(blocks.get("RISK", "")),
-        "MACRO":        parse_stories(blocks.get("MACRO", "")),
-        "EVENTS":       blocks.get("EVENTS", '<div class="muted">No upcoming events detected.</div>'),
-        "TAKEAWAYS":    blocks.get("TAKEAWAYS", ""),
-        "QUICK_LINKS":  blocks.get("QUICK_LINKS", ""),
-        "AI_PROVIDER":  escape(provider_label),
-        "AUTHORS":      AUTHOR_SECTION_HTML,
-        "MAX_WIDTH":    "1080",
-        "FOOTER_NOTE":  escape("Payments News • Auto-generated") + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {provider_label}</span>',
+        "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
+        "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", "")),
+        "RISK": parse_stories(blocks.get("RISK", "")),
+        "MACRO": parse_stories(blocks.get("MACRO", "")),
+        "EVENTS": blocks.get(
+            "EVENTS", '<div class="muted">No upcoming events detected.</div>'
+        ),
+        "TAKEAWAYS": blocks.get("TAKEAWAYS", ""),
+        "QUICK_LINKS": blocks.get("QUICK_LINKS", ""),
+        "AI_PROVIDER": escape(provider_label),
+        "AUTHORS": AUTHOR_SECTION_HTML,
+        "MAX_WIDTH": "1080",
+        "FOOTER_NOTE": escape("Payments News • Auto-generated")
+        + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {provider_label}</span>',
     }
 
     return fill_template(template, mapping), blocks, provider_label
+
 
 # ========================================================================================
 # ── OUTLOOK EMAIL OUTPUT ────────────────────────────────────────────────────────────────
@@ -668,7 +749,13 @@ AUTHOR_SECTION_HTML = """
 </table>
 """
 
-def generate_outlook_email_html(blocks: dict, articles: list, provider_label: str, template_path: str = "TEMPLATE.html") -> str:
+
+def generate_outlook_email_html(
+    blocks: dict,
+    articles: list,
+    provider_label: str,
+    template_path: str = "TEMPLATE.html",
+) -> str:
     """
     Renders an Outlook-compatible email from pre-computed AI blocks.
     Call this after generate_newsletter_html() — it reuses the same blocks
@@ -687,67 +774,174 @@ def generate_outlook_email_html(blocks: dict, articles: list, provider_label: st
         template = f.read()
 
     mapping = {
-        "TITLE":        "Payments Industry Newsletter",
-        "DATE_LINE":    escape(date_line),
-        "FOCUS_TITLE":  escape(focus_title),
+        "TITLE": "Payments Industry Newsletter",
+        "DATE_LINE": escape(date_line),
+        "FOCUS_TITLE": escape(focus_title),
         "FOCUS_SUBTITLE": escape(focus_subtitle),
-        "KEY_NUMBERS":  parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
-        "TOP_STORIES":  parse_stories(blocks.get("TOP_STORIES", "")),
-        "RISK":         parse_stories(blocks.get("RISK", "")),
-        "MACRO":        parse_stories(blocks.get("MACRO", "")),
-        "EVENTS":       blocks.get("EVENTS", '<div class="muted">No upcoming events detected.</div>'),
-        "TAKEAWAYS":    blocks.get("TAKEAWAYS", ""),
-        "QUICK_LINKS":  blocks.get("QUICK_LINKS", ""),
-        "AI_PROVIDER":  escape(provider_label),
-        "AUTHORS":      AUTHOR_SECTION_HTML,
-        "MAX_WIDTH":    "680",
-        "FOOTER_NOTE":  escape("Payments News • Auto-generated") + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {escape(provider_label)}</span>',
+        "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
+        "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", "")),
+        "RISK": parse_stories(blocks.get("RISK", "")),
+        "MACRO": parse_stories(blocks.get("MACRO", "")),
+        "EVENTS": blocks.get(
+            "EVENTS", '<div class="muted">No upcoming events detected.</div>'
+        ),
+        "TAKEAWAYS": blocks.get("TAKEAWAYS", ""),
+        "QUICK_LINKS": blocks.get("QUICK_LINKS", ""),
+        "AI_PROVIDER": escape(provider_label),
+        "AUTHORS": AUTHOR_SECTION_HTML,
+        "MAX_WIDTH": "680",
+        "FOOTER_NOTE": escape("Payments News • Auto-generated")
+        + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {escape(provider_label)}</span>',
     }
 
     return fill_template(template, mapping)
+
 
 # ────────────────────────────────────────────────────────────────────────────────────────
 
 
 # ========================================================================================
+# ── EMAIL DELIVERY ───────────────────────────────────────────────────────────────────────
+
+NEWSLETTER_RECIPIENTS = [
+    "liam.r.grimwood@accenture.com",
+    "morgan.moloney@accenture.com",
+]
+
+
+def _send_via_smtp(
+    html_content: str, subject: str, smtp_user: str, smtp_pass: str
+) -> None:
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_user
+    msg["To"] = ", ".join(NEWSLETTER_RECIPIENTS)
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
+    with smtplib.SMTP("smtp.office365.com", 587) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(smtp_user, NEWSLETTER_RECIPIENTS, msg.as_string())
+
+
+def _send_via_graph(
+    html_content: str,
+    subject: str,
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    mail_sender: str,
+) -> None:
+    token_resp = requests.post(
+        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+        data={
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+        },
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json()["access_token"]
+
+    send_resp = requests.post(
+        f"https://graph.microsoft.com/v1.0/users/{mail_sender}/sendMail",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "message": {
+                "subject": subject,
+                "body": {"contentType": "HTML", "content": html_content},
+                "toRecipients": [
+                    {"emailAddress": {"address": addr}}
+                    for addr in NEWSLETTER_RECIPIENTS
+                ],
+            }
+        },
+    )
+    send_resp.raise_for_status()
+
+
+def send_newsletter_email(html_content: str, subject: str) -> None:
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASSWORD")
+    tenant_id = os.environ.get("AZURE_TENANT_ID")
+    client_id = os.environ.get("AZURE_CLIENT_ID")
+    client_secret = os.environ.get("AZURE_CLIENT_SECRET")
+    mail_sender = os.environ.get("MAIL_SENDER")
+
+    try:
+        if smtp_user and smtp_pass:
+            print("📨 Sending via SMTP...")
+            _send_via_smtp(html_content, subject, smtp_user, smtp_pass)
+        elif all([tenant_id, client_id, client_secret, mail_sender]):
+            print("📨 Sending via Microsoft Graph API...")
+            _send_via_graph(
+                html_content, subject, tenant_id, client_id, client_secret, mail_sender
+            )
+        else:
+            print("⚠️  No email credentials set — skipping send.")
+            return
+        print(f"✉️  Email sent to: {', '.join(NEWSLETTER_RECIPIENTS)}")
+    except Exception as e:
+        print(f"❌ Email send failed: {e}")
+
+
+# ========================================================================================
 
 if __name__ == "__main__":
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("     PAYMENTS NEWS BOT")
-    print("="*70)
-    
+    print("=" * 70)
+
     # Step 1: Fetch news
-    articles = fetch_news()          # your RSS feeds
+    articles = fetch_news()  # your RSS feeds
     scheme_articles = fetch_scheme_press()
 
     articles.extend(scheme_articles)
 
-    
     if not articles:
         print("\n❌ No articles found!")
     else:
         # Step 2: Generate browser preview (also runs the AI call)
-        browser_html, ai_blocks, provider_label = generate_newsletter_html(client, articles, template_path="TEMPLATE.html")
+        browser_html, ai_blocks, provider_label = generate_newsletter_html(
+            client, articles, template_path="TEMPLATE.html"
+        )
 
         # Step 3: Generate Outlook email (reuses AI blocks — no second API call)
-        outlook_html = generate_outlook_email_html(ai_blocks, articles, provider_label, template_path="TEMPLATE.html")
+        outlook_html = generate_outlook_email_html(
+            ai_blocks, articles, provider_label, template_path="TEMPLATE.html"
+        )
 
         # Save both outputs
-        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeneratedReports")
+        output_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "GeneratedReports"
+        )
         os.makedirs(output_dir, exist_ok=True)
-        timestamp = datetime.now().strftime('%d-%m-%y_%H-%M')
+        timestamp = datetime.now().strftime("%d-%m-%y_%H-%M")
 
         browser_file = f"PaymentsNewsReport_{timestamp}.html"
-        with open(os.path.join(output_dir, browser_file), 'w', encoding='utf-8') as f:
+        with open(os.path.join(output_dir, browser_file), "w", encoding="utf-8") as f:
             f.write(browser_html)
 
         email_file = f"PaymentsEmail_{timestamp}.html"
-        with open(os.path.join(output_dir, email_file), 'w', encoding='utf-8') as f:
+        with open(os.path.join(output_dir, email_file), "w", encoding="utf-8") as f:
             f.write(outlook_html)
 
         print(f"\n💾 Browser preview : GeneratedReports/{browser_file}")
         print(f"📧 Outlook email   : GeneratedReports/{email_file}")
-        print(f"   Open the browser file to check layout; use the email file for sending.")
+        print(
+            f"   Open the browser file to check layout; use the email file for sending."
+        )
+
+        # Step 4: Send email (skipped silently if SMTP creds not set)
+        date_str = datetime.now().strftime("%d %B %Y")
+        send_newsletter_email(
+            html_content=outlook_html,
+            subject=f"Payments Industry Newsletter — {date_str}",
+        )
 
         print("\n✅ SUCCESS!")
 

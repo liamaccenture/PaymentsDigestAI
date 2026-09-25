@@ -5,11 +5,12 @@
 An automated **payments industry newsletter generator** for UK/EMEA audiences. It:
 1. Aggregates articles from RSS feeds (regulators, industry publications, financial news)
 2. Scrapes press releases directly from payment scheme websites (Visa, etc.)
-3. Sends the full article list to OpenAI (GPT-4o-mini) for curation and summarisation
+3. Sends the full article list to an LLM (OpenAI or Anthropic) for curation and summarisation
 4. Fills an HTML email template with the AI-generated content
-5. Saves the final newsletter as a timestamped HTML file
+5. Saves two outputs: a browser preview and an Outlook-compatible email HTML
 
 Target audience: UK/EMEA payments industry professionals and leaders.
+Curators: Liam Grimwood + Morgan Moloney (Manchester Payments Team).
 
 ---
 
@@ -18,19 +19,24 @@ Target audience: UK/EMEA payments industry professionals and leaders.
 | File | Purpose |
 |------|---------|
 | `NewsBot.py` | Single-file application — all logic lives here |
-| `TEMPLATE.html` | HTML email template using `{{VARIABLE}}` placeholders |
-| `PaymentsNewsletterExample.html` | Sample generated output (reference only) |
+| `TEMPLATE.html` | HTML email template using `{{VARIABLE}}` placeholders — single source of truth for both outputs |
+| `requirements.txt` | Python dependencies for local install and GitHub Actions CI |
+| `.github/workflows/newsletter.yml` | GitHub Actions weekly schedule (Monday 07:00 UTC) |
+| `GeneratedReports/` | Timestamped output files written by NewsBot.py each run |
 | `Archived/` | Old versions of the script — not used |
 
 ---
 
 ## Key Configuration (in NewsBot.py)
 
-- **`RSS_FEEDS`** (lines ~20–51): Dictionary of source name → RSS URL. Covers BoE, FCA, PYMNTS, Payments Dive, UK Finance, FT, Sky News, NilsonReport, etc.
-- **`articlesCountPerFeed`** (line ~53): Articles fetched per feed (default: 7).
-- **`schemes`** (lines ~148–152): Payment scheme press release page URLs. Only Visa is active; Mastercard/SWIFT are commented out.
-- **`NEWSLETTER_PROMPT`** (lines ~221–332): Large system prompt defining newsletter structure, section rules, geographic filters, and word/length constraints.
-- **`max_output_tokens`** (line ~344): Token cap for GPT response (default: 5500).
+- **`LLM_PROVIDER`** (line ~18): `"openai"` or `"anthropic"` — controls which API is called.
+- **`OPENAI_MODEL`** (line ~22): Currently `gpt-5.6-terra`. Change here to switch model.
+- **`ANTHROPIC_MODEL`** (line ~25): Currently `claude-sonnet-4-6`.
+- **`RSS_FEEDS`** (lines ~55–85): Dictionary of source name → RSS URL. Covers BoE, FCA, PYMNTS, Payments Dive, UK Finance, FT, Sky News, NilsonReport, etc.
+- **`articlesCountPerFeed`**: Articles fetched per feed (default: 7).
+- **`schemes`**: Payment scheme press release page URLs. Only Visa is active; Mastercard/SWIFT are commented out.
+- **`NEWSLETTER_PROMPT`**: Large system prompt defining newsletter structure, section rules, geographic filters, and word/length constraints.
+- **`OPENAI_MAX_TOKENS`**: Token cap for OpenAI response (default: 8000).
 
 ---
 
@@ -38,34 +44,47 @@ Target audience: UK/EMEA payments industry professionals and leaders.
 
 ```
 python NewsBot.py
-  ├── fetch_news()              → parse RSS feeds via feedparser
-  ├── fetch_scheme_press()      → scrape Visa press release HTML page
-  ├── build_ai_input_document() → format articles as structured text for AI
+  ├── fetch_news()                    → parse RSS feeds via feedparser
+  ├── fetch_scheme_press()            → scrape Visa press release HTML page
+  ├── build_ai_input_document()       → format articles as structured text for AI
   ├── generate_newsletter_html_with_gpt()
-  │     ├── OpenAI Responses API call (gpt-4o-mini)
-  │     ├── extract_blocks()    → parse [BLOCK:NAME]...[END] from AI output
-  │     ├── parse_focus()       → extract FOCUS_TITLE + FOCUS_SUBTITLE
-  │     └── fill_template()     → replace {{VARS}} in TEMPLATE.html
-  └── Write email_preview_YYYYMMDD_HHMMSS.html
+  │     ├── LLM API call (OpenAI or Anthropic)
+  │     ├── extract_blocks()          → parse [BLOCK:NAME]...[END] from AI output
+  │     ├── parse_focus()             → extract FOCUS_TITLE + FOCUS_SUBTITLE
+  │     ├── fill_template()           → replace {{VARS}} in TEMPLATE.html
+  │     └── generate_outlook_email_html() → second pass for email-specific rendering
+  └── Write to GeneratedReports/
+        ├── PaymentsNewsReport_DD-MM-YY_HH-MM.html       (browser preview)
+        └── PaymentsNewsReport_DD-MM-YY_HH-MM_email.html (Outlook email)
 ```
+
+---
+
+## TEMPLATE.html Layout
+
+Two-column layout (60% left / 40% right) using table-based HTML for Outlook compatibility:
+
+- **Left column**: Top Stories
+- **Right column**: Events → Takeaways → Risk → Macro → Further Reading
+  - Further Reading has `flex:1` (CSS) so it stretches to match the left column height — works in browsers; Outlook falls back to natural stacking
+- **Full width below columns**: Authors section (Liam Grimwood + Morgan Moloney), Footer
+
+Hero header shows title, date, focus story, and key stat pills. AI provider label is intentionally omitted from the header.
 
 ---
 
 ## Newsletter Sections (AI-generated)
 
-The AI prompt instructs GPT to produce these named blocks:
-
 | Block | Content |
 |-------|---------|
 | `FOCUS` | Single headline story (title + subtitle) |
-| `PILLS` | Short badge-style callouts (scheme impacts, regulatory alerts) |
+| `KEY_NUMBERS` | 3–4 stat pills (e.g. transaction volumes, fines) |
 | `TOP_STORIES` | 3–5 curated articles with bullets |
 | `RISK` | Regulatory/compliance stories |
 | `MACRO` | Macro-economic signals relevant to payments |
-| `EVENTS` | Upcoming industry events |
+| `EVENTS` | Upcoming industry events table |
 | `TAKEAWAYS` | Executive summary bullets |
 | `QUICK_LINKS` | Short-form links to additional stories |
-| `OUTSIDE` | Non-payments adjacent stories worth noting |
 
 ---
 
@@ -74,19 +93,21 @@ The AI prompt instructs GPT to produce these named blocks:
 ```
 feedparser       # RSS parsing
 openai           # OpenAI API client
+anthropic        # Anthropic API client
 requests         # HTTP for press release scraping
 beautifulsoup4   # HTML parsing for press pages
 ```
 
-Standard library: `re`, `html`, `datetime`, `smtplib`, `email.mime` (last two unused in current MVP).
-
 ---
 
-## Known Issues / TODOs
+## Environment Variables
 
-1. **Email sending**: `smtplib` is imported but not implemented. Planned next step.
-2. **AWS Lambda deployment**: Flagged in comments as a future goal, along with S3 article caching.
-3. **Mastercard/SWIFT press pages**: Commented out in `schemes` list — to be re-enabled.
+| Variable | Required for |
+|----------|-------------|
+| `OPENAI_API_KEY` | `LLM_PROVIDER = "openai"` |
+| `ANTHROPIC_API_KEY` | `LLM_PROVIDER = "anthropic"` |
+
+For GitHub Actions: add the relevant key as a repository secret under `liamaccenture/PaymentsDigestAI` → Settings → Secrets → Actions.
 
 ---
 
@@ -96,12 +117,20 @@ Standard library: `re`, `html`, `datetime`, `smtplib`, `email.mime` (last two un
 python NewsBot.py
 ```
 
-Outputs a file like `email_preview_20260427_143000.html` in the working directory.
+Outputs two files in `GeneratedReports/`. Open the browser file to check layout; use the email file for sending.
 
 ---
 
-## Cost Tracking
+## GitHub Actions Schedule
 
-The script calculates and prints API cost after each run using gpt-4o-mini pricing:
-- Input: $0.15 / 1M tokens
-- Output: $0.60 / 1M tokens
+Workflow at `.github/workflows/newsletter.yml` runs every **Monday at 07:00 UTC** (08:00 UK / 09:00 CEST). Can also be triggered manually from the GitHub Actions tab. Generated HTML files are uploaded as artifacts (retained 30 days).
+
+Email delivery (task 6) is not yet wired up — for now, download artifacts from the Actions run.
+
+---
+
+## Known Issues / TODOs
+
+1. **Email sending**: `smtplib` is imported but not implemented. Next task — configure SMTP delivery to Liam and Morgan first, then wider distribution list.
+2. **Mastercard/SWIFT press pages**: Commented out in `schemes` list — to be re-enabled.
+3. **Outlook column alignment**: CSS flexbox aligns column bottoms in browsers; Outlook renders natural table stacking (right column may end slightly shorter than left — acceptable).
