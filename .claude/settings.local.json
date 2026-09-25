@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ':*)",
+      "Bash(python NewsBot.py)",
+      "Bash(python -X utf8 NewsBot.py)",
+      "WebFetch(domain:www.ecb.europa.eu)",
+      "WebFetch(domain:www.bankingsupervision.europa.eu)",
+      "WebFetch(domain:www.bis.org)",
+      "WebFetch(domain:www.psr.org.uk)",
+      "WebFetch(domain:www.gov.uk)",
+      "WebFetch(domain:www.eba.europa.eu)",
+      "WebFetch(domain:www.fsb.org)",
+      "WebFetch(domain:www.wearepay.uk)",
+      "WebFetch(domain:www.vocalink.com)",
+      "WebFetch(domain:www.openbanking.org.uk)",
+      "WebFetch(domain:www.fintechfutures.com)",
+      "WebFetch(domain:thefintechtimes.com)",
+      "WebFetch(domain:www.finextra.com)",
+      "WebFetch(domain:mondato.com)",
+      "WebFetch(domain:www.altfi.com)",
+      "WebFetch(domain:sifted.eu)",
+      "WebFetch(domain:www.verdict.co.uk)",
+      "WebFetch(domain:cmspi.com)",
+      "WebFetch(domain:www.abe-eba.eu)",
+      "WebFetch(domain:www.swift.com)",
+      "WebFetch(domain:feeds.reuters.com)"
+    ]
+  }
+}
