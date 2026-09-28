@@ -801,95 +801,6 @@ def generate_outlook_email_html(
 
 
 # ========================================================================================
-# ── EMAIL DELIVERY ───────────────────────────────────────────────────────────────────────
-
-NEWSLETTER_RECIPIENTS = [
-    "liam.r.grimwood@accenture.com",
-    "morgan.moloney@accenture.com",
-]
-
-
-def _send_via_smtp(
-    html_content: str, subject: str, smtp_user: str, smtp_pass: str
-) -> None:
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = smtp_user
-    msg["To"] = ", ".join(NEWSLETTER_RECIPIENTS)
-    msg.attach(MIMEText(html_content, "html", "utf-8"))
-    with smtplib.SMTP("smtp.office365.com", 587) as server:
-        server.ehlo()
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(smtp_user, NEWSLETTER_RECIPIENTS, msg.as_string())
-
-
-def _send_via_graph(
-    html_content: str,
-    subject: str,
-    tenant_id: str,
-    client_id: str,
-    client_secret: str,
-    mail_sender: str,
-) -> None:
-    token_resp = requests.post(
-        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
-        data={
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "scope": "https://graph.microsoft.com/.default",
-        },
-    )
-    token_resp.raise_for_status()
-    access_token = token_resp.json()["access_token"]
-
-    send_resp = requests.post(
-        f"https://graph.microsoft.com/v1.0/users/{mail_sender}/sendMail",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "message": {
-                "subject": subject,
-                "body": {"contentType": "HTML", "content": html_content},
-                "toRecipients": [
-                    {"emailAddress": {"address": addr}}
-                    for addr in NEWSLETTER_RECIPIENTS
-                ],
-            }
-        },
-    )
-    send_resp.raise_for_status()
-
-
-def send_newsletter_email(html_content: str, subject: str) -> None:
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASSWORD")
-    tenant_id = os.environ.get("AZURE_TENANT_ID")
-    client_id = os.environ.get("AZURE_CLIENT_ID")
-    client_secret = os.environ.get("AZURE_CLIENT_SECRET")
-    mail_sender = os.environ.get("MAIL_SENDER")
-
-    try:
-        if smtp_user and smtp_pass:
-            print("📨 Sending via SMTP...")
-            _send_via_smtp(html_content, subject, smtp_user, smtp_pass)
-        elif all([tenant_id, client_id, client_secret, mail_sender]):
-            print("📨 Sending via Microsoft Graph API...")
-            _send_via_graph(
-                html_content, subject, tenant_id, client_id, client_secret, mail_sender
-            )
-        else:
-            print("⚠️  No email credentials set — skipping send.")
-            return
-        print(f"✉️  Email sent to: {', '.join(NEWSLETTER_RECIPIENTS)}")
-    except Exception as e:
-        print(f"❌ Email send failed: {e}")
-
-
-# ========================================================================================
 
 if __name__ == "__main__":
     print("\n" + "=" * 70)
@@ -934,13 +845,6 @@ if __name__ == "__main__":
         print(f"📧 Outlook email   : GeneratedReports/{email_file}")
         print(
             f"   Open the browser file to check layout; use the email file for sending."
-        )
-
-        # Step 4: Send email (skipped silently if SMTP creds not set)
-        date_str = datetime.now().strftime("%d %B %Y")
-        send_newsletter_email(
-            html_content=outlook_html,
-            subject=f"Payments Industry Newsletter — {date_str}",
         )
 
         print("\n✅ SUCCESS!")

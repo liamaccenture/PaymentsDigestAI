@@ -158,9 +158,9 @@
               <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
                 <tr valign="top">
 
-                  <!-- LEFT: Top Stories -->
+                  <!-- LEFT: Top Stories → Macro -->
                   <td class="col-main" width="60%" valign="top" style="padding-right:8px;">
-                    <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
+                    <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="margin-bottom:16px;background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
                       <tr><td style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
                         <h2 style="margin:0 0 14px;font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;">
                           Top stories <span style="font-weight:400;color:#4b5563;font-size:14px;">(highest payments relevance)</span>
@@ -168,20 +168,27 @@
                         {{TOP_STORIES}}
                       </td></tr>
                     </table>
+                    <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
+                      <tr><td style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
+                        <h2 style="margin:0 0 14px;font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;">
+                          Macro &amp; market signals <span style="font-weight:400;color:#4b5563;font-size:14px;">(payments-relevant)</span>
+                        </h2>
+                        {{MACRO}}
+                      </td></tr>
+                    </table>
                   </td>
 
                   <td class="col-gap" width="16" style="font-size:0;line-height:0;" aria-hidden="true">&nbsp;</td>
 
-                  <!-- RIGHT: Events → Takeaways → Risk → Macro → Further Reading (stretches to fill) -->
-                  <td class="col-side" width="40%" valign="top" style="height:100%;">
-                    <div style="display:flex;flex-direction:column;height:100%;gap:16px;">
-                      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
+                  <!-- RIGHT: Events → Takeaways → Risk → Further Reading -->
+                  <td class="col-side" width="40%" valign="top">
+                      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="margin-bottom:16px;background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
                         <tr><td style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
                           <h2 style="margin:0 0 14px;font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;">Upcoming dates &amp; watchlist</h2>
                           <div class="events">{{EVENTS}}</div>
                         </td></tr>
                       </table>
-                      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
+                      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="margin-bottom:16px;background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
                         <tr><td style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
                           <h2 style="margin:0 0 14px;font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;">
                             Key takeaways <span style="font-weight:400;color:#4b5563;font-size:14px;">(exec skim)</span>
@@ -189,7 +196,7 @@
                           {{TAKEAWAYS}}
                         </td></tr>
                       </table>
-                      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
+                      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="margin-bottom:16px;background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
                         <tr><td style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
                           <h2 style="margin:0 0 14px;font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;">
                             Risk &amp; compliance <span style="font-weight:400;color:#4b5563;font-size:14px;">(practical implications)</span>
@@ -199,21 +206,12 @@
                       </table>
                       <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
                         <tr><td style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
-                          <h2 style="margin:0 0 14px;font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;">
-                            Macro &amp; market signals <span style="font-weight:400;color:#4b5563;font-size:14px;">(payments-relevant)</span>
-                          </h2>
-                          {{MACRO}}
-                        </td></tr>
-                      </table>
-                      <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff" style="flex:1;background:#ffffff;border:1px solid #d1d5db;border-radius:16px;box-shadow:0 4px 18px rgba(17,24,39,0.06);" role="presentation">
-                        <tr><td style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
                           <h2 style="margin:0 0 14px;font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;">Further reading</h2>
                           <div class="side-list-label">Additional reads from today's feed:</div>
                           <div style="height:1px;background:#e5e7eb;margin:10px 0 14px;"></div>
                           <div class="side-list">{{QUICK_LINKS}}</div>
                         </td></tr>
                       </table>
-                    </div>
                   </td>
 
                 </tr>
