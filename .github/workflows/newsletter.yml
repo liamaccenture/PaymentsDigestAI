@@ -27,7 +27,9 @@ jobs:
       - name: Run NewsBot
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python NewsBot.py
+        run: |
+          rm -rf GeneratedReports/*
+          python NewsBot.py
 
       - name: Upload newsletter output
         uses: actions/upload-artifact@v4
