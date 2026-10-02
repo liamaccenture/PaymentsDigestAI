@@ -9,6 +9,8 @@ on:
 jobs:
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repo
@@ -33,3 +35,19 @@ jobs:
           name: newsletter-${{ github.run_id }}
           path: GeneratedReports/
           retention-days: 30
+
+      - name: Commit generated reports to repo
+        run: |
+          mkdir -p NewGitActionsGeneratedNewsletter
+          mkdir -p ArchivedGitActionsGeneratedNewsletter
+          # Move any existing files from the 'latest' folder into archive
+          if [ "$(ls -A NewGitActionsGeneratedNewsletter)" ]; then
+            mv NewGitActionsGeneratedNewsletter/* ArchivedGitActionsGeneratedNewsletter/
+          fi
+          # Copy freshly generated reports into the 'latest' folder
+          cp GeneratedReports/* NewGitActionsGeneratedNewsletter/
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add NewGitActionsGeneratedNewsletter/ ArchivedGitActionsGeneratedNewsletter/
+          git diff --cached --quiet || git commit -m "chore: add generated newsletter $(date +'%d-%m-%Y')"
+          git push
