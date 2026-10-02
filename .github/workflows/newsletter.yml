@@ -44,7 +44,19 @@ jobs:
           aws-region: eu-west-2
 
       - name: Upload newsletter to S3
-        run: aws s3 sync GeneratedReports/ s3://payments-digest-newsletter-755909809281-eu-west-2-an/ --delete
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          if [[ "$BRANCH" == *"north-west"* ]]; then
+            FOLDER="north-west"
+          else
+            FOLDER="main"
+          fi
+          BUCKET="payments-digest-newsletter-755909809281-eu-west-2-an"
+          # Move current latest into archive
+          aws s3 sync s3://$BUCKET/$FOLDER/latest/ s3://$BUCKET/$FOLDER/archive/ --region eu-west-2
+          # Clear latest and push new files
+          aws s3 rm s3://$BUCKET/$FOLDER/latest/ --recursive --region eu-west-2
+          aws s3 sync GeneratedReports/ s3://$BUCKET/$FOLDER/latest/ --region eu-west-2
 
       - name: Commit generated reports to repo
         run: |
