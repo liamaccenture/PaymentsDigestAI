@@ -20,8 +20,8 @@ LLM_PROVIDER = "openai"
 
 # Model names (change here to upgrade/downgrade)
 # OPENAI_MODEL    = "gpt-5.5"               # TEMP: trialling gpt-5.5 — better capability + token efficiency
-OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
-# OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
+# OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
+OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
 # OPENAI_MODEL  = "gpt-4o-mini"           # previous model — uncomment to revert (~40x cheaper)
 ANTHROPIC_MODEL = (
     "claude-sonnet-4-6"  # alt: "claude-haiku-4-5-20251001", "claude-opus-4-6"
