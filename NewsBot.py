@@ -20,8 +20,8 @@ LLM_PROVIDER = "openai"
 
 # Model names (change here to upgrade/downgrade)
 # OPENAI_MODEL    = "gpt-5.5"               # TEMP: trialling gpt-5.5 — better capability + token efficiency
-OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
-# OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
+# OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
+OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
 # OPENAI_MODEL  = "gpt-4o-mini"           # previous model — uncomment to revert (~40x cheaper)
 ANTHROPIC_MODEL = (
     "claude-sonnet-4-6"  # alt: "claude-haiku-4-5-20251001", "claude-opus-4-6"
@@ -124,6 +124,11 @@ RSS_FEEDS = {
     # ===== GENERAL FINANCIAL NEWS =====
     "Financial Times - Payments": "https://www.ft.com/payments?format=rss",
     "Sky News - Business": "https://feeds.skynews.com/feeds/rss/business.xml",
+    # ===== NORTH WEST UK =====
+    "Prolific North": "https://www.prolificnorth.co.uk/feed/",
+    "Place North West": "https://www.placenorthwest.co.uk/feed/",
+    "Insider Media - North West": "https://www.insidermedia.com/news/north-west/rss",
+    "Manchester Evening News - Business": "https://www.manchestereveningnews.co.uk/business/?service=rss",
 }
 
 # Inactive feeds (kept for reference):
@@ -497,10 +502,23 @@ NEWSLETTER_PROMPT = """
     Actively look for Visa, Mastercard, SWIFT scheme references even if the source is not the scheme itself.
     Scheme changes (rules, pricing, access, messaging standards) are always high priority.
 
-    GEOGRAPHIC RULE (CRITICAL): Primary audience is UK and EMEA Payments professionals.
-    Prioritise UK first, then EMEA. Include global items ONLY with clear UK/EMEA implications.
-    Exclude US-only or APAC-only items unless they directly affect UK/EMEA firms
-    (e.g. a US Fed rate decision with no BoE response or UK transmission mechanism should be excluded).
+    GEOGRAPHIC RULE (CRITICAL): Primary audience is North West UK payments professionals at Accenture Manchester.
+    Frame every story through the lens of how it affects our NW client portfolio specifically.
+
+    NW CLIENT PORTFOLIO — always check if a story directly affects any of these firms:
+    RETAIN & GROW (existing NW relationships): Barclays, Leeds Building Society, Nationwide, NatWest
+    BREAK IN (target accounts with no NW presence yet): BNY Mellon, Citi, Bank of America, HSBC,
+      Lloyds Banking Group, J.P. Morgan, Chase, AIG, Royal London
+    WIN NET NEW (NW mid-market): Manchester Building Society, Co-op Insurance, Starling Bank,
+      Yorkshire Building Society, Skipton Building Society
+
+    If a story directly names or affects one of the above firms, flag it as high priority regardless of geography.
+    In the CONSULT field, name the specific client or client tier the opportunity targets
+    (e.g. "NatWest APP fraud gap analysis", "HSBC break-in: ISO 20022 readiness assessment",
+    "Starling Bank: real-time payments fraud controls").
+
+    Prioritise NW-specific stories first, then broader UK, then EMEA. Include global items ONLY with clear NW/UK client implications.
+    Exclude US-only or APAC-only items unless they directly affect firms in our NW portfolio.
 
     Return ONLY the blocks below. No markdown. No HTML wrapper tags.
 
@@ -521,25 +539,27 @@ NEWSLETTER_PROMPT = """
     [END]
 
     [BLOCK:TOP_STORIES]
-    4–5 stories. UK/EMEA only unless global item has direct UK/EMEA impact.
+    4–5 stories. Prioritise stories with direct North West UK relevance. For each story explicitly call out
+    the NW angle in WHY or TAKE where one exists.
     Use compact format — Python renders the HTML:
     SRC:SOURCE|TAG:tag-[risk|regulatory|tech|infra|macro|scheme]|LABEL:TAG_TEXT
     HEAD:Headline — max 12 words
-    WHY:Why it matters — max 18 words
-    TAKE:Key takeaway — max 18 words
-    CONSULT:Specific consulting workstream this creates — max 18 words (omit line entirely if no genuine angle exists)
+    WHY:Why it matters to NW UK clients — max 18 words
+    TAKE:Key takeaway for NW firms — max 18 words
+    CONSULT:Specific NW-focused consulting opportunity — max 18 words (omit line entirely if no genuine angle exists)
     URL:https://...
     SCHEME:Scheme impact (optional — only for scheme stories)
-    GEO:UK/EMEA relevance (optional — only for global stories)
+    GEO:NW/UK relevance (optional — only for global stories)
     ---
     [END]
 
     [BLOCK:RISK]
-    2–3 stories. UK regulators (FCA, PRA, BoE) and EU first. Same compact format as TOP_STORIES.
+    2–3 stories. UK regulators (FCA, PRA, BoE) first. Frame risk implications for NW-based firms specifically.
+    Same compact format as TOP_STORIES.
     [END]
 
     [BLOCK:MACRO]
-    1–2 stories. Global macro only where UK/EMEA payments firms are directly affected. Same compact format.
+    1–2 stories. Global macro only where NW UK payments firms are directly affected. Same compact format.
     [END]
 
     [BLOCK:EVENTS]
