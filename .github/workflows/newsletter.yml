@@ -9,6 +9,8 @@ on:
 jobs:
   generate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repo
@@ -25,7 +27,9 @@ jobs:
       - name: Run NewsBot
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python NewsBot.py
+        run: |
+          rm -rf GeneratedReports/*
+          python NewsBot.py
 
       - name: Upload newsletter output
         uses: actions/upload-artifact@v4
@@ -33,3 +37,41 @@ jobs:
           name: newsletter-${{ github.run_id }}
           path: GeneratedReports/
           retention-days: 30
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+
+      - name: Upload newsletter to S3
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          if [[ "$BRANCH" == *"north-west"* ]]; then
+            FOLDER="north-west"
+          else
+            FOLDER="main"
+          fi
+          BUCKET="payments-digest-newsletter-755909809281-eu-west-2-an"
+          # Move current latest into archive
+          aws s3 sync s3://$BUCKET/$FOLDER/latest/ s3://$BUCKET/$FOLDER/archive/ --region eu-west-2
+          # Clear latest and push new files
+          aws s3 rm s3://$BUCKET/$FOLDER/latest/ --recursive --region eu-west-2
+          aws s3 sync GeneratedReports/ s3://$BUCKET/$FOLDER/latest/ --region eu-west-2
+
+      - name: Commit generated reports to repo
+        run: |
+          mkdir -p NewGitActionsGeneratedNewsletter
+          mkdir -p ArchivedGitActionsGeneratedNewsletter
+          # Move any existing files from the 'latest' folder into archive
+          if [ "$(ls -A NewGitActionsGeneratedNewsletter)" ]; then
+            mv NewGitActionsGeneratedNewsletter/* ArchivedGitActionsGeneratedNewsletter/
+          fi
+          # Copy freshly generated reports into the 'latest' folder
+          cp GeneratedReports/* NewGitActionsGeneratedNewsletter/
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add NewGitActionsGeneratedNewsletter/ ArchivedGitActionsGeneratedNewsletter/
+          git diff --cached --quiet || git commit -m "chore: add generated newsletter $(date +'%d-%m-%Y')"
+          git push

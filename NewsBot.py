@@ -116,6 +116,7 @@ RSS_FEEDS = {
     "PYMNTS": "https://www.pymnts.com/feed/",
     "Finextra - Payments": "https://www.finextra.com/rss/channel.aspx?channel=payments",
     "The Payments Association": "https://www.thepaymentsassociation.org/feed/",
+    "Business Wire - Payments": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJaF1hQWA==",
     "Payments Dive": "https://www.paymentsdive.com/feeds/news/",
     # ===== UK FINANCIAL SERVICES =====
     "UK Finance": "https://www.ukfinance.org.uk/rss.xml",
