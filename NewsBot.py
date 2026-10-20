@@ -312,7 +312,67 @@ def extract_blocks(text: str) -> dict:
     return blocks
 
 
-def parse_stories(block_text: str) -> str:
+# ── EMAIL RENDERING HELPERS ─────────────────────────────────────────────────────────────
+# Outlook desktop renders HTML with Word: it ignores border-radius, div padding and margins.
+# So each "box" is a VML rounded rectangle for Outlook (inside <!--[if mso]>) and a normal
+# CSS div for every other client (Gmail, Outlook web/mobile, Apple Mail).
+# `width` is the box's outer width in px (needed by VML); `arc` is VML corner roundness in %
+# of the box's shorter side, so use small values for tall boxes and larger for small tiles.
+EMAIL_FONT = "font-family:Arial,Helvetica,sans-serif;"
+EMAIL_CONTENT_W = 566  # inner width of a section box (600 - 2*16 padding - border)
+
+
+def email_box_open(width, bg="#ffffff", border="#d1d5db", pad=16, arc=4, radius=14):
+    return (
+        f'<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" arcsize="{arc}%" '
+        f'fillcolor="{bg}" strokecolor="{border}" strokeweight="1px" style="width:{width}px;">'
+        f'<v:textbox style="mso-fit-shape-to-text:true" inset="{pad}px,{pad}px,{pad}px,{pad}px"><![endif]-->'
+        f'<!--[if !mso]><!--><div style="background:{bg};border:1px solid {border};'
+        f'border-radius:{radius}px;padding:{pad}px;"><!--<![endif]-->'
+    )
+
+
+def email_box_close():
+    return "<!--[if mso]></v:textbox></v:roundrect><![endif]--><!--[if !mso]><!--></div><!--<![endif]-->"
+
+
+def email_box(inner, width, **kw):
+    return email_box_open(width, **kw) + inner + email_box_close()
+
+
+def email_stack(items, gap=10):
+    """Vertical list with spacer rows (Word ignores margins between blocks)."""
+    spacer = (
+        f'<tr><td height="{gap}" style="height:{gap}px;font-size:1px;line-height:1px;">&nbsp;</td></tr>'
+    )
+    rows = spacer.join(f"<tr><td>{i}</td></tr>" for i in items)
+    return f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">{rows}</table>'
+
+
+def email_frame_open(width=600, pad=16):
+    """Section container. Plain bordered table in Outlook (nesting VML inside VML breaks
+    Word's layout), rounded div everywhere else."""
+    return (
+        f'<!--[if mso]><table width="{width}" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" '
+        f'style="border:1px solid #d1d5db;" role="presentation"><tr><td style="padding:{pad}px;"><![endif]-->'
+        f'<!--[if !mso]><!--><div style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;padding:{pad}px;"><!--<![endif]-->'
+    )
+
+
+def email_frame_close():
+    return "<!--[if mso]></td></tr></table><![endif]--><!--[if !mso]><!--></div><!--<![endif]-->"
+
+
+def email_button(url, text="Read &#8594;"):
+    return (
+        '<table cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+        f'<td bgcolor="#2563eb" style="background:#2563eb;border-radius:10px;padding:8px 16px;">'
+        f'<a href="{url}" style="color:#ffffff;{EMAIL_FONT}font-size:13px;font-weight:700;text-decoration:none;">{text}</a>'
+        "</td></tr></table>"
+    )
+
+
+def parse_stories(block_text: str, email: bool = False) -> str:
     FONT = "font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;"
     TAG_INLINE = {
         "tag-risk": "background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;",
@@ -357,6 +417,31 @@ def parse_stories(block_text: str) -> str:
         tag_style = TAG_INLINE.get(
             tag_raw, "background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;"
         )
+
+        if email:
+            lis = "".join(
+                f'<li style="margin:0 0 5px;font-size:13px;line-height:1.45;color:#374151;{EMAIL_FONT}">'
+                f"<b>{k}:</b> {escape(v)}</li>"
+                for k, v in (
+                    ("Why it matters", why),
+                    ("Key takeaway", take),
+                    ("Opportunity", consult),
+                    ("Scheme impact", scheme),
+                    ("UK/EMEA relevance", geo),
+                )
+                if v
+            )
+            inner = (
+                f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">'
+                f'<tr valign="middle"><td style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#4b5563;{EMAIL_FONT}">{escape(src_tag)}</td>'
+                f'<td align="right"><span style="font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;{tag_style}{EMAIL_FONT}">&nbsp;{escape(label)}&nbsp;</span></td></tr>'
+                f'<tr><td colspan="2" style="padding-top:8px;font-size:15px;font-weight:700;line-height:1.3;color:#111827;{EMAIL_FONT}">{escape(head)}</td></tr>'
+                f'<tr><td colspan="2" style="padding-top:8px;"><ul style="margin:0;padding-left:18px;">{lis}</ul></td></tr>'
+                f'<tr><td colspan="2" style="padding-top:10px;">{email_button(escape(url))}</td></tr>'
+                f"</table>"
+            )
+            html_parts.append(email_box(inner, EMAIL_CONTENT_W, border="#e5e7eb", pad=14, arc=6))
+            continue
 
         extra_bullets = ""
         if scheme:
@@ -406,10 +491,10 @@ def parse_stories(block_text: str) -> str:
             f"</td></tr>\n"
             f"</table>"
         )
-    return "\n".join(html_parts)
+    return email_stack(html_parts, 12) if email else "\n".join(html_parts)
 
 
-def parse_key_numbers(block_text: str) -> str:
+def parse_key_numbers(block_text: str, email: bool = False) -> str:
     """Convert compact key-numbers format to an Outlook-compatible 4-cell table."""
     NUM_COLORS = {
         "kn-warn": "#c2410c",
@@ -448,6 +533,28 @@ def parse_key_numbers(block_text: str) -> str:
         cards.append(("—", "No data", "", "#2563eb", "#"))
     cards = cards[:4]
 
+    if email:
+        # 2x2 grid of rounded boxes; cells carry class="stack" so phones get one column.
+        def cell(c, pad):
+            val, label, src, num_color, url = c
+            inner = (
+                f'<p style="margin:0;font-size:26px;font-weight:700;line-height:1.1;{EMAIL_FONT}">'
+                f'<a href="{url}" style="color:{num_color};text-decoration:none;">{val}</a></p>'
+                f'<p style="margin:4px 0 0;font-size:13px;color:#374151;{EMAIL_FONT}">{label}</p>'
+                f'<p style="margin:4px 0 0;font-size:11px;color:#6b7280;font-style:italic;{EMAIL_FONT}">{src}</p>'
+            )
+            return (
+                f'<td class="stack" width="50%" valign="top" style="padding:{pad};">'
+                f'{email_box(inner, 292, border="#e5e7eb", pad=14, arc=10)}</td>'
+            )
+
+        return (
+            '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">'
+            f"<tr>{cell(cards[0], '0 4px 8px 0')}{cell(cards[1], '0 0 8px 4px')}</tr>"
+            f"<tr>{cell(cards[2], '0 4px 0 0')}{cell(cards[3], '0 0 0 4px')}</tr>"
+            "</table>"
+        )
+
     tds = []
     for i, (val, label, src, num_color, url) in enumerate(cards):
         right_pad = "padding-right:12px;" if i < 3 else ""
@@ -465,6 +572,145 @@ def parse_key_numbers(block_text: str) -> str:
         '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
         + "".join(tds)
         + "</tr></table>"
+    )
+
+
+def _parse_cards(block_text: str) -> list[dict]:
+    """Parse '---'-separated compact blocks of KEY:value|KEY:value lines."""
+    cards = []
+    for chunk in block_text.strip().split("---"):
+        fields = {}
+        for line in chunk.strip().splitlines():
+            for part in line.split("|"):
+                k, sep, v = part.partition(":")
+                if sep and k.strip().isupper():
+                    fields[k.strip()] = v.strip()
+        if fields:
+            cards.append(fields)
+    return cards
+
+
+# type -> (border, background, label colour)
+TAKEAWAY_STYLES = {
+    "default": ("#2563eb", "#f8faff", "#2563eb"),
+    "risk": ("#b91c1c", "#fef9f9", "#b91c1c"),
+    "tech": ("#15803d", "#f6fef8", "#15803d"),
+    "macro": ("#7e22ce", "#fdf8ff", "#7e22ce"),
+    "scheme": ("#065f46", "#f0fdfb", "#065f46"),
+}
+
+
+def parse_takeaways(block_text: str, email: bool = False) -> str:
+    cards = _parse_cards(block_text)[:4]
+    if not cards:
+        return ""
+
+    def card(c, pad="0"):
+        border, bg, lab = TAKEAWAY_STYLES.get(c.get("TYPE", ""), TAKEAWAY_STYLES["default"])
+        size = "14px" if email else "12px"
+        return (
+            f'<td class="stack" width="{"100%" if email else "50%"}" valign="top" style="padding:{pad};">'
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+            f'<td><div style="border-left:4px solid {border};border-radius:0 12px 12px 0;background:{bg};padding:10px 12px;font-family:Arial,Helvetica,sans-serif;">'
+            f'<div style="font-size:12px;font-weight:700;color:{lab};text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">{escape(c.get("LABEL", ""))}</div>'
+            f'<div style="font-size:{size};color:#111827;line-height:1.45;">{escape(c.get("TEXT", ""))}</div>'
+            f"</div>"
+            f"</td></tr></table></td>"
+        )
+
+    if email:  # single column: one rounded box per takeaway, outlined in its accent colour
+        items = []
+        for c in cards:
+            border, bg, lab = TAKEAWAY_STYLES.get(c.get("TYPE", ""), TAKEAWAY_STYLES["default"])
+            inner = (
+                f'<p style="margin:0;font-size:12px;font-weight:700;color:{lab};text-transform:uppercase;letter-spacing:.06em;{EMAIL_FONT}">{escape(c.get("LABEL", ""))}</p>'
+                f'<p style="margin:3px 0 0;font-size:14px;color:#111827;line-height:1.45;{EMAIL_FONT}">{escape(c.get("TEXT", ""))}</p>'
+            )
+            items.append(email_box(inner, EMAIL_CONTENT_W, bg=bg, border=border, pad=12, arc=12))
+        return email_stack(items, 8)
+    else:  # two-column grid
+        rows = ""
+        for i in range(0, len(cards), 2):
+            pair = cards[i : i + 2]
+            tds = card(pair[0], f"{'10px' if i else '0'} 5px 0 0")
+            if len(pair) > 1:
+                tds += card(pair[1], f"{'10px' if i else '0'} 0 0 5px")
+            rows += f'<tr valign="top">{tds}</tr>'
+    return f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">{rows}</table>'
+
+
+EVENT_BADGES = {
+    "reg": ("Regulatory", "#1d4ed8", "#eff6ff", "#bfdbfe"),
+    "comp": ("Compliance", "#b91c1c", "#fef2f2", "#fecaca"),
+    "infra": ("Infrastructure", "#c2410c", "#fff7ed", "#fed7aa"),
+    "scheme": ("Scheme", "#065f46", "#ecfdf5", "#a7f3d0"),
+}
+
+
+def parse_events(block_text: str, email: bool = False) -> str:
+    events = _parse_cards(block_text)
+    if not events:
+        return '<div class="muted" style="font-size:14px;color:#4b5563;">No upcoming events detected.</div>'
+
+    def parts(e):
+        name, colour, bg, border = EVENT_BADGES.get(e.get("TYPE", ""), ("Event", "#374151", "#f3f4f6", "#e5e7eb"))
+        title = escape(e.get("EVENT", ""))
+        if e.get("URL"):
+            title = f'<a href="{escape(e["URL"])}" style="color:#2563eb;text-decoration:underline;">{title}</a>'
+        badge = (
+            f'<span class="ev-badge ev-{escape(e.get("TYPE", ""))}" style="font-size:12px;font-weight:600;color:{colour};'
+            f'background:{bg};border:1px solid {border};border-radius:999px;padding:2px 7px;">{name}</span>'
+        )
+        return escape(e.get("DATE", "")), title, badge, escape(e.get("REL", ""))
+
+    if email:  # one rounded box per event: date tile | title + type badge + relevance
+        items = []
+        for e in events:
+            _, title, badge, _ = parts(e)
+            _, colour, bg, border = EVENT_BADGES.get(e.get("TYPE", ""), ("", "#374151", "#f3f4f6", "#e5e7eb"))
+            words = e.get("DATE", "").split()
+            if len(words) >= 2 and words[0].isdigit():  # "22 Oct" / "1 Jan 2027"
+                top, bottom, top_size = words[0], " ".join(words[1:]).upper(), "22px"
+            else:  # "Nov 2026" - no day number
+                top, bottom, top_size = " ".join(words[:1]).upper(), " ".join(words[1:]).upper(), "16px"
+            rel = e.get("REL", "")
+            rel_colour, rel_bg = {"High": ("#b91c1c", "#fef2f2"), "Medium": ("#b45309", "#fffbeb")}.get(
+                rel, ("#4b5563", "#f3f4f6")
+            )
+            tile = (
+                '<table width="60" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+                f'<td align="center" bgcolor="{bg}" style="background:{bg};border:1px solid {border};border-radius:12px;padding:8px 2px;">'
+                f'<p style="margin:0;font-size:{top_size};font-weight:700;line-height:1.1;color:{colour};{EMAIL_FONT}">{escape(top)}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;font-weight:700;letter-spacing:.06em;color:{colour};{EMAIL_FONT}">{escape(bottom)}</p>'
+                "</td></tr></table>"
+            )
+            inner = (
+                '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr valign="middle">'
+                f'<td width="76" style="width:76px;">{tile}</td>'
+                f'<td style="{EMAIL_FONT}">'
+                f'<p style="margin:0;font-size:14px;font-weight:700;line-height:1.35;color:#111827;{EMAIL_FONT}">{title}</p>'
+                f'<p style="margin:6px 0 0;">{badge} <span style="font-size:12px;font-weight:600;color:{rel_colour};background:{rel_bg};border-radius:999px;padding:2px 8px;{EMAIL_FONT}">&nbsp;{escape(rel)} relevance&nbsp;</span></p>'
+                "</td></tr></table>"
+            )
+            items.append(email_box(inner, EMAIL_CONTENT_W, border="#e5e7eb", pad=10, arc=10))
+        return email_stack(items, 8)
+
+    head = "".join(f'<th scope="col" align="left">{h}</th>' for h in ("Date", "Event", "Type", "Relevance"))
+    body = ""
+    for e in events:
+        date, title, badge, rel = parts(e)
+        body += f"<tr><td>{date}</td><td>{title}</td><td>{badge}</td><td>{rel}</td></tr>"
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def render_quick_links(links_html: str, email: bool = False) -> str:
+    if not email:
+        return links_html
+    links = re.findall(r'<a\s+[^>]*href="([^"]+)"[^>]*>(.*?)</a>', links_html, re.DOTALL)
+    return "".join(
+        f'<p style="margin:0 0 10px;font-size:15px;line-height:1.4;font-family:Arial,Helvetica,sans-serif;">'
+        f'<a href="{url}" style="color:#2563eb;text-decoration:underline;">{title}</a></p>'
+        for url, title in links
     )
 
 
@@ -544,30 +790,22 @@ NEWSLETTER_PROMPT = """
     [END]
 
     [BLOCK:EVENTS]
-    <table> with <thead> and <tbody>. Columns: Date | Event | Type | Relevance.
-    Add scope="col" to every <th>. Type badge: <span class="ev-badge ev-[reg|comp|infra|scheme]">Label</span>
-    Relevance: High / Medium / Watch. Max 6 rows, future dates only (today is {TODAY}). Input-only.
-    Wrap the event name in <a href="URL"> using the source URL from the input document where available.
-    If none: <div class="muted">No upcoming events detected.</div>
+    Max 6 upcoming events, future dates only (today is {TODAY}). Input-only. Python renders the table.
+    One event per block, separated by --- on its own line:
+    DATE:12 Nov|EVENT:event name|TYPE:[reg|comp|infra|scheme]|REL:[High|Medium|Watch]
+    URL:https://... (source URL from the input document, omit line if none)
+    ---
+    If none, leave the block empty.
     [END]
 
     [BLOCK:TAKEAWAYS]
-    4 cards in a two-column Outlook-safe table. Max 20 words each. One sentence only.
-    Labels: Risk signal | Regulatory deadline | Tech opportunity | Scheme change | Consulting demand | Macro watch
-    Type colour map — inline styles are required; Outlook strips CSS class-based styles:
-      default:     border:#2563eb  bg:#f8faff  label-color:#2563eb
-      mini-risk:   border:#b91c1c  bg:#fef9f9  label-color:#b91c1c
-      mini-tech:   border:#15803d  bg:#f6fef8  label-color:#15803d
-      mini-macro:  border:#7e22ce  bg:#fdf8ff  label-color:#7e22ce
-      mini-scheme: border:#065f46  bg:#f0fdfb  label-color:#065f46
-    Replace [BORDER], [BG], [LABEL-COLOR], [TYPE], [LABEL], [TEXT] with real values:
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr valign="top">
-    <td width="50%" style="padding-right:5px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
-    <td width="50%" style="padding-left:5px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
-    </tr><tr valign="top">
-    <td style="padding-right:5px;padding-top:10px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
-    <td style="padding-left:5px;padding-top:10px;"><div class="mini mini-[TYPE]" style="border-left:4px solid [BORDER];border-radius:0 12px 12px 0;padding:10px 12px;background:[BG];"><div class="mini-label" style="font-size:12px;font-weight:700;color:[LABEL-COLOR];text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;font-family:Arial,sans-serif;">[LABEL]</div><p style="margin:0;font-size:12px;color:#111827;line-height:1.4;font-family:Arial,sans-serif;">[TEXT]</p></div></td>
-    </tr></table>
+    Exactly 4 cards. One sentence each, max 20 words. Python renders the layout.
+    LABEL: Risk signal | Regulatory deadline | Tech opportunity | Scheme change | Consulting demand | Macro watch
+    TYPE: risk | tech | macro | scheme | default (default for regulatory/consulting)
+    One card per block, separated by --- on its own line:
+    TYPE:[risk|tech|macro|scheme|default]|LABEL:label
+    TEXT:the takeaway sentence
+    ---
     [END]
 
     [BLOCK:QUICK_LINKS]
@@ -580,6 +818,35 @@ NEWSLETTER_PROMPT = """
     - FOCUS_TITLE: max 8 words. FOCUS_SUBTITLE: max 20 words.
     Tag classes: tag-risk=fraud/crime/cyber | tag-regulatory=FCA/PRA/BoE/EU | tag-tech=ISO20022/rails/AI/cloud | tag-infra=RTGS/CHAPS/network | tag-macro=rates/M&A/macro | tag-scheme=Visa/MC/SWIFT/SEPA/FPS
     """
+
+
+def build_mapping(blocks: dict, articles: list, provider_label: str, email: bool) -> dict:
+    """Template variables for either output. email=True uses the simplified email renderers."""
+    focus_title, focus_subtitle = parse_focus(blocks.get("FOCUS", ""))
+    focus_title = focus_title or "Payments signals"
+    focus_subtitle = focus_subtitle or "Regulation • Risk • Rails"
+    date_line = f"{datetime.now().strftime('%d %b %Y')} • {len(articles)} items scanned"
+    footer = escape("Payments News • Auto-generated")
+    if not email:
+        footer += f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {escape(provider_label)}</span>'
+
+    return {
+        "TITLE": "Payments Industry Newsletter",
+        "DATE_LINE": escape(date_line),
+        "FOCUS_TITLE": escape(focus_title),
+        "FOCUS_SUBTITLE": escape(focus_subtitle),
+        "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", ""), email),
+        "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", ""), email),
+        "RISK": parse_stories(blocks.get("RISK", ""), email),
+        "MACRO": parse_stories(blocks.get("MACRO", ""), email),
+        "EVENTS": parse_events(blocks.get("EVENTS", ""), email),
+        "TAKEAWAYS": parse_takeaways(blocks.get("TAKEAWAYS", ""), email),
+        "QUICK_LINKS": render_quick_links(blocks.get("QUICK_LINKS", ""), email),
+        "AI_PROVIDER": escape(provider_label),
+        "AUTHORS": author_section_html(email),
+        "MAX_WIDTH": "600" if email else "1080",
+        "FOOTER_NOTE": footer,
+    }
 
 
 def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
@@ -656,38 +923,10 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
 
     blocks = extract_blocks(ai_text)
 
-    focus_title, focus_subtitle = parse_focus(blocks.get("FOCUS", ""))
-    if not focus_title:
-        focus_title = "Payments signals"
-    if not focus_subtitle:
-        focus_subtitle = "Regulation • Risk • Rails"
-
-    today = datetime.now().strftime("%d %b %Y")
-    date_line = f"{today} • {len(articles)} items scanned"
-
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
-    mapping = {
-        "TITLE": "Payments Industry Newsletter",
-        "DATE_LINE": escape(date_line),
-        "FOCUS_TITLE": escape(focus_title),
-        "FOCUS_SUBTITLE": escape(focus_subtitle),
-        "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
-        "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", "")),
-        "RISK": parse_stories(blocks.get("RISK", "")),
-        "MACRO": parse_stories(blocks.get("MACRO", "")),
-        "EVENTS": blocks.get(
-            "EVENTS", '<div class="muted">No upcoming events detected.</div>'
-        ),
-        "TAKEAWAYS": blocks.get("TAKEAWAYS", ""),
-        "QUICK_LINKS": blocks.get("QUICK_LINKS", ""),
-        "AI_PROVIDER": escape(provider_label),
-        "AUTHORS": AUTHOR_SECTION_HTML,
-        "MAX_WIDTH": "1080",
-        "FOOTER_NOTE": escape("Payments News • Auto-generated")
-        + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {provider_label}</span>',
-    }
+    mapping = build_mapping(blocks, articles, provider_label, email=False)
 
     return fill_template(template, mapping), blocks, provider_label
 
@@ -720,6 +959,7 @@ AUTHOR_SECTION_HTML = """
               </td>
               <td>
                 <div style="font-size:14px;font-weight:700;color:#111827;font-family:Arial,Helvetica,sans-serif;">Liam Grimwood</div>
+                <div style="font-size:12px;color:#6b7280;font-family:Arial,Helvetica,sans-serif;padding-top:2px;">Creator &amp; Co-curator</div>
               </td>
             </tr>
           </table>
@@ -737,6 +977,7 @@ AUTHOR_SECTION_HTML = """
               </td>
               <td>
                 <div style="font-size:14px;font-weight:700;color:#111827;font-family:Arial,Helvetica,sans-serif;">Morgan Moloney</div>
+                <div style="font-size:12px;color:#6b7280;font-family:Arial,Helvetica,sans-serif;padding-top:2px;">Co-curator, automation delivery</div>
               </td>
             </tr>
           </table>
@@ -749,49 +990,65 @@ AUTHOR_SECTION_HTML = """
 """
 
 
+# Outlook (desktop + web) and Gmail block base64 "data:" images, so for the EMAIL copy photos
+# must be hosted at a public https URL (or attached inline as CID when SMTP sending is built).
+# Paste the URLs here; leave blank to fall back to the embedded photos (fine for the browser
+# copy and for pasting into an Outlook compose window; initials show in Outlook desktop).
+AUTHOR_PHOTO_URLS = {
+    "Liam Grimwood": "",
+    "Morgan Moloney": "",
+}
+
+
+AUTHOR_ROLES = {
+    "Liam Grimwood": "Creator &amp; Co-curator",
+    "Morgan Moloney": "Co-curator, automation delivery",
+}
+
+
+def author_section_html(email: bool) -> str:
+    if not email:
+        return AUTHOR_SECTION_HTML
+
+    def person(name):
+        # Photo: hosted URL if configured, else the embedded base64 (create_outlook_draft.py
+        # converts embedded images to inline attachments). No Outlook initials fallback:
+        # Word shows the real <img> fine once it is an inline attachment.
+        m = re.search(r'src="(data:image/[^"]+)"\s+width="52"\s+height="52"\s+alt="%s"' % re.escape(name), AUTHOR_SECTION_HTML)
+        src = AUTHOR_PHOTO_URLS.get(name) or (m.group(1) if m else "")
+        return (
+            f'<td class="stack" width="50%" valign="middle" style="padding:4px 0;">'
+            f'<table cellpadding="0" cellspacing="0" border="0" role="presentation"><tr valign="middle">'
+            f'<td width="64" style="padding-right:12px;"><img src="{src}" width="52" height="52" alt="{name}" '
+            f'style="display:block;border-radius:50%;"></td>'
+            f'<td style="{EMAIL_FONT}"><p style="margin:0;font-size:14px;font-weight:700;color:#111827;">{name}</p>'
+            f'<p style="margin:2px 0 0;font-size:12px;color:#6b7280;">{AUTHOR_ROLES[name]}</p></td>'
+            f"</tr></table></td>"
+        )
+
+    inner = (
+        f'<p style="margin:0 0 10px;font-size:16px;font-weight:700;color:#111827;{EMAIL_FONT}">Your curators</p>'
+        '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
+        f'{person("Liam Grimwood")}{person("Morgan Moloney")}</tr></table>'
+    )
+    return email_box(inner, 600, pad=16, arc=6)
+
+
 def generate_outlook_email_html(
     blocks: dict,
     articles: list,
     provider_label: str,
-    template_path: str = "TEMPLATE.html",
+    template_path: str = "TEMPLATE_EMAIL.html",
 ) -> str:
     """
     Renders an Outlook-compatible email from pre-computed AI blocks.
     Call this after generate_newsletter_html() — it reuses the same blocks
     so no second API call is made.
     """
-    focus_title, focus_subtitle = parse_focus(blocks.get("FOCUS", ""))
-    if not focus_title:
-        focus_title = "Payments signals"
-    if not focus_subtitle:
-        focus_subtitle = "Regulation • Risk • Rails"
-
-    today = datetime.now().strftime("%d %b %Y")
-    date_line = f"{today} • {len(articles)} items scanned"
-
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
-    mapping = {
-        "TITLE": "Payments Industry Newsletter",
-        "DATE_LINE": escape(date_line),
-        "FOCUS_TITLE": escape(focus_title),
-        "FOCUS_SUBTITLE": escape(focus_subtitle),
-        "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
-        "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", "")),
-        "RISK": parse_stories(blocks.get("RISK", "")),
-        "MACRO": parse_stories(blocks.get("MACRO", "")),
-        "EVENTS": blocks.get(
-            "EVENTS", '<div class="muted">No upcoming events detected.</div>'
-        ),
-        "TAKEAWAYS": blocks.get("TAKEAWAYS", ""),
-        "QUICK_LINKS": blocks.get("QUICK_LINKS", ""),
-        "AI_PROVIDER": escape(provider_label),
-        "AUTHORS": AUTHOR_SECTION_HTML,
-        "MAX_WIDTH": "680",
-        "FOOTER_NOTE": escape("Payments News • Auto-generated")
-        + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {escape(provider_label)}</span>',
-    }
+    mapping = build_mapping(blocks, articles, provider_label, email=True)
 
     return fill_template(template, mapping)
 
@@ -822,7 +1079,7 @@ if __name__ == "__main__":
 
         # Step 3: Generate Outlook email (reuses AI blocks — no second API call)
         outlook_html = generate_outlook_email_html(
-            ai_blocks, articles, provider_label, template_path="TEMPLATE.html"
+            ai_blocks, articles, provider_label, template_path="TEMPLATE_EMAIL.html"
         )
 
         # Save both outputs
