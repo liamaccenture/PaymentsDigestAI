@@ -323,17 +323,18 @@ EMAIL_CONTENT_W = 566  # inner width of a section box (600 - 2*16 padding - bord
 
 
 def email_box_open(width, bg="#ffffff", border="#d1d5db", pad=16, arc=4, radius=14):
+    # Outlook gets a plain bordered table, NOT a VML roundrect: a filled VML shape sits on top of
+    # its contents in sent mail, so links inside (e.g. the "Read" buttons) can't be clicked.
     return (
-        f'<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" arcsize="{arc}%" '
-        f'fillcolor="{bg}" strokecolor="{border}" strokeweight="1px" style="width:{width}px;">'
-        f'<v:textbox style="mso-fit-shape-to-text:true" inset="{pad}px,{pad}px,{pad}px,{pad}px"><![endif]-->'
+        f'<!--[if mso]><table width="{width}" cellpadding="0" cellspacing="0" border="0" bgcolor="{bg}" '
+        f'style="border:1px solid {border};" role="presentation"><tr><td style="padding:{pad}px;"><![endif]-->'
         f'<!--[if !mso]><!--><div style="background:{bg};border:1px solid {border};'
         f'border-radius:{radius}px;padding:{pad}px;"><!--<![endif]-->'
     )
 
 
 def email_box_close():
-    return "<!--[if mso]></v:textbox></v:roundrect><![endif]--><!--[if !mso]><!--></div><!--<![endif]-->"
+    return "<!--[if mso]></td></tr></table><![endif]--><!--[if !mso]><!--></div><!--<![endif]-->"
 
 
 def email_box(inner, width, **kw):
@@ -364,10 +365,11 @@ def email_frame_close():
 
 
 def email_button(url, text="Read &#8594;"):
+    # Original table layout (known to render correctly in Outlook); only change is target="_blank".
     return (
         '<table cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
-        f'<td bgcolor="#2563eb" style="background:#2563eb;border-radius:10px;padding:8px 16px;">'
-        f'<a href="{url}" style="color:#ffffff;{EMAIL_FONT}font-size:13px;font-weight:700;text-decoration:none;">{text}</a>'
+        '<td bgcolor="#2563eb" style="background:#2563eb;border-radius:10px;padding:8px 16px;">'
+        f'<a href="{url}" target="_blank" style="color:#ffffff;{EMAIL_FONT}font-size:13px;font-weight:700;text-decoration:none;">{text}</a>'
         "</td></tr></table>"
     )
 
