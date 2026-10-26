@@ -326,7 +326,9 @@ def email_box_open(width, bg="#ffffff", border="#d1d5db", pad=16, arc=4, radius=
     # Outlook gets a plain bordered table, NOT a VML roundrect: a filled VML shape sits on top of
     # its contents in sent mail, so links inside (e.g. the "Read" buttons) can't be clicked.
     return (
-        f'<!--[if mso]><table width="{width}" cellpadding="0" cellspacing="0" border="0" bgcolor="{bg}" '
+        # width="100%" (not `width`): Word draws the border outside a fixed width, which overflowed the
+        # parent cell by 2px and clipped the right-hand border.
+        f'<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{bg}" '
         f'style="border:1px solid {border};" role="presentation"><tr><td style="padding:{pad}px;"><![endif]-->'
         f'<!--[if !mso]><!--><div style="background:{bg};border:1px solid {border};'
         f'border-radius:{radius}px;padding:{pad}px;"><!--<![endif]-->'
@@ -354,7 +356,9 @@ def email_frame_open(width=600, pad=16):
     """Section container. Plain bordered table in Outlook (nesting VML inside VML breaks
     Word's layout), rounded div everywhere else."""
     return (
-        f'<!--[if mso]><table width="{width}" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" '
+        # width="100%": Word draws the border outside a fixed width, so a 600px frame was 602px wide
+        # inside its 600px container and its right edge (and the boxes in it) got clipped.
+        f'<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" '
         f'style="border:1px solid #d1d5db;" role="presentation"><tr><td style="padding:{pad}px;"><![endif]-->'
         f'<!--[if !mso]><!--><div style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;padding:{pad}px;"><!--<![endif]-->'
     )
@@ -1099,8 +1103,22 @@ if __name__ == "__main__":
         with open(os.path.join(output_dir, email_file), "w", encoding="utf-8") as f:
             f.write(outlook_html)
 
+        # Unsent Outlook draft (.msg) for the mailbox owner — pure Python, no Outlook needed, so it
+        # also runs on the GitHub Actions runner.
+        msg_file = None
+        try:
+            from make_msg import build_msg
+
+            msg_file = os.path.basename(
+                build_msg(os.path.join(output_dir, email_file))[0]
+            )
+        except Exception as e:
+            print(f"\n⚠️  Skipped Outlook .msg draft: {e}")
+
         print(f"\n💾 Browser preview : GeneratedReports/{browser_file}")
         print(f"📧 Outlook email   : GeneratedReports/{email_file}")
+        if msg_file:
+            print(f"📨 Outlook draft   : GeneratedReports/{msg_file}  (double-click to open as a draft)")
         print(
             f"   Open the browser file to check layout; use the email file for sending."
         )
