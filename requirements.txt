@@ -4,3 +4,4 @@ requests
 beautifulsoup4
 anthropic
 python-dotenv
+extract-msg
