@@ -20,8 +20,8 @@ LLM_PROVIDER = "openai"
 
 # Model names (change here to upgrade/downgrade)
 # OPENAI_MODEL    = "gpt-5.5"               # TEMP: trialling gpt-5.5 — better capability + token efficiency
-# OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
-OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
+OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
+# OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
 # OPENAI_MODEL  = "gpt-4o-mini"           # previous model — uncomment to revert (~40x cheaper)
 ANTHROPIC_MODEL = (
     "claude-sonnet-4-6"  # alt: "claude-haiku-4-5-20251001", "claude-opus-4-6"
@@ -137,6 +137,8 @@ RSS_FEEDS = {
 # 'Fintech Weekly': 'https://www.fintechweekly.com/feed/'    — low signal
 
 articles_per_feed = 7
+NW_FEEDS = {"Prolific North", "Place North West", "Insider Media - North West", "Manchester Evening News - Business"}
+articles_per_nw_feed = 20
 
 # ========================================================================================
 
@@ -182,9 +184,10 @@ def fetch_news():
                     f"   ⚠️  Warning: Feed may have issues ({getattr(feed, 'bozo_exception', '')})"
                 )
 
-            # Extract articles
+            # Extract articles — NW feeds pull more to increase chance of finding payments stories
             article_count = 0
-            for entry in feed.entries[:articles_per_feed]:
+            limit = articles_per_nw_feed if source_name in NW_FEEDS else articles_per_feed
+            for entry in feed.entries[:limit]:
                 article = {
                     "source": source_name,
                     "title": entry.get("title", "No title"),
@@ -506,17 +509,23 @@ NEWSLETTER_PROMPT = """
     GEOGRAPHIC RULE (CRITICAL): Primary audience is North West UK payments professionals at Accenture Manchester.
     Frame every story through the lens of how it affects our NW client portfolio specifically.
 
-    NW CLIENT PORTFOLIO — always check if a story directly affects any of these firms:
-    RETAIN & GROW (existing NW relationships): Barclays, Leeds Building Society, Nationwide, NatWest
-    BREAK IN (target accounts with no NW presence yet): BNY Mellon, Citi, Bank of America, HSBC,
+    NW PRIORITY CLIENTS (RETAIN & GROW — always flag stories involving these four firms):
+      Leeds Building Society | Barclays | NatWest | Nationwide
+    If a story names any of these four directly, escalate to high priority regardless of topic or geography.
+    In the CONSULT field, name the specific client and angle
+    (e.g. "NatWest APP fraud gap analysis", "Leeds BS: open banking roadmap review",
+    "Barclays: ISO 20022 migration advisory", "Nationwide: real-time fraud controls").
+
+    NW EXTENDED PORTFOLIO — also check for stories affecting:
+    BREAK IN (targets with no current NW Accenture relationship): BNY Mellon, Citi, Bank of America, HSBC,
       Lloyds Banking Group, J.P. Morgan, Chase, AIG, Royal London
     WIN NET NEW (NW mid-market): Manchester Building Society, Co-op Insurance, Starling Bank,
       Yorkshire Building Society, Skipton Building Society
 
-    If a story directly names or affects one of the above firms, flag it as high priority regardless of geography.
-    In the CONSULT field, name the specific client or client tier the opportunity targets
-    (e.g. "NatWest APP fraud gap analysis", "HSBC break-in: ISO 20022 readiness assessment",
-    "Starling Bank: real-time payments fraud controls").
+    NW REGIONAL INTELLIGENCE — for the NW_SPOTLIGHT block, surface NW stories with a genuine payments
+    or financial services angle: fintech investment, banking technology hiring, digital payments expansion,
+    financial firm growth in Manchester/Leeds/Liverpool, or regulatory actions affecting NW-based firms.
+    Generic NW property, retail, or non-financial M&A must be excluded even if sourced from NW publications.
 
     Prioritise NW-specific stories first, then broader UK, then EMEA. Include global items ONLY with clear NW/UK client implications.
     Exclude US-only or APAC-only items unless they directly affect firms in our NW portfolio.
@@ -537,6 +546,26 @@ NEWSLETTER_PROMPT = """
     VAL:VALUE|LABEL:short label|SRC:source name|CLASS:kn-[warn|good|brand]
     URL:https://...
     ---
+    [END]
+
+    [BLOCK:NW_SPOTLIGHT]
+    2–3 stories specifically framed for our four NW priority clients: Leeds Building Society, Barclays, NatWest, Nationwide.
+    Search ALL articles in the input. Pick payments stories that are most directly relevant to these four firms —
+    they do NOT need to name the client explicitly; choose stories where the client is clearly affected and
+    where you can write a specific, named CONSULT opportunity for one of the four.
+    Story must be substantively about payments: fraud/APP reimbursement, real-time rails, ISO 20022,
+    open banking, card scheme changes, FCA/PRA payment regulation, fintech, acquiring, or digital payments.
+    Mortgages, lending, property, event listings, and generic M&A without a payments dimension are excluded.
+    Frame HEAD, WHY, and TAKE specifically around the NW client angle — not the global story angle.
+    Use compact format — Python renders the HTML:
+    SRC:SOURCE|TAG:tag-[risk|regulatory|tech|infra|macro|scheme]|LABEL:TAG_TEXT
+    HEAD:Headline written for NW client context — max 12 words
+    WHY:Why this payments story matters for Leeds BS / Barclays / NatWest / Nationwide — max 18 words
+    TAKE:Key payments takeaway for our NW client relationships — max 18 words
+    CONSULT:Named client + specific payments opportunity e.g. "NatWest: APP reimbursement gap analysis" — max 18 words
+    URL:https://...
+    ---
+    If truly no payments story can be connected to any of the four clients, output exactly one line: NO_NW_STORIES
     [END]
 
     [BLOCK:TOP_STORIES]
@@ -688,12 +717,20 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
+    nw_raw = blocks.get("NW_SPOTLIGHT", "")
+    nw_html = (
+        parse_stories(nw_raw)
+        if nw_raw.strip() and "NO_NW_STORIES" not in nw_raw
+        else ""
+    )
+
     mapping = {
-        "TITLE": "Payments Industry Newsletter",
+        "TITLE": "NW Payments Digest",
         "DATE_LINE": escape(date_line),
         "FOCUS_TITLE": escape(focus_title),
         "FOCUS_SUBTITLE": escape(focus_subtitle),
         "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
+        "NW_SPOTLIGHT": nw_html,
         "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", "")),
         "RISK": parse_stories(blocks.get("RISK", "")),
         "MACRO": parse_stories(blocks.get("MACRO", "")),
@@ -705,7 +742,7 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
         "AI_PROVIDER": escape(provider_label),
         "AUTHORS": AUTHOR_SECTION_HTML,
         "MAX_WIDTH": "1080",
-        "FOOTER_NOTE": escape("Payments News • Auto-generated")
+        "FOOTER_NOTE": escape("NW Payments Digest • Auto-generated")
         + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {provider_label}</span>',
     }
 
@@ -792,12 +829,20 @@ def generate_outlook_email_html(
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
 
+    nw_raw = blocks.get("NW_SPOTLIGHT", "")
+    nw_html = (
+        parse_stories(nw_raw)
+        if nw_raw.strip() and "NO_NW_STORIES" not in nw_raw
+        else ""
+    )
+
     mapping = {
-        "TITLE": "Payments Industry Newsletter",
+        "TITLE": "NW Payments Digest",
         "DATE_LINE": escape(date_line),
         "FOCUS_TITLE": escape(focus_title),
         "FOCUS_SUBTITLE": escape(focus_subtitle),
         "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", "")),
+        "NW_SPOTLIGHT": nw_html,
         "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", "")),
         "RISK": parse_stories(blocks.get("RISK", "")),
         "MACRO": parse_stories(blocks.get("MACRO", "")),
@@ -809,7 +854,7 @@ def generate_outlook_email_html(
         "AI_PROVIDER": escape(provider_label),
         "AUTHORS": AUTHOR_SECTION_HTML,
         "MAX_WIDTH": "680",
-        "FOOTER_NOTE": escape("Payments News • Auto-generated")
+        "FOOTER_NOTE": escape("NW Payments Digest • Auto-generated")
         + f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {escape(provider_label)}</span>',
     }
 
