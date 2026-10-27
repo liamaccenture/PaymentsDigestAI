@@ -69,7 +69,7 @@ def build_draft(path: str):
 
     outlook = win32com.client.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)  # olMailItem
-    mail.Subject = f"Payments Industry Newsletter — {datetime.now().strftime('%d %b %Y')}"
+    mail.Subject = f"Payments Tech Industry Digest — {datetime.now().strftime('%d %b %Y')}"
 
     with tempfile.TemporaryDirectory() as tmp:
         for i, (cid, data) in enumerate(images):

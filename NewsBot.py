@@ -3,7 +3,8 @@ import io
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import calendar
 import re
 from html import escape
 import requests
@@ -133,7 +134,45 @@ RSS_FEEDS = {
 
 articles_per_feed = 7
 
+# Only articles published within this many days are kept (undated items are kept).
+MAX_ARTICLE_AGE_DAYS = 30
+
+# Mastercard and SWIFT block scripted access to their own newsrooms (HTTP 403, including with a
+# browser User-Agent), so their announcements are read through Google News RSS, restricted to each
+# scheme's own domain. Links are Google News redirects that open the original article.
+SCHEME_NEWS_FEEDS = {
+    "Mastercard": f"https://news.google.com/rss/search?q=site:mastercard.com+when:{MAX_ARTICLE_AGE_DAYS}d&hl=en-GB&gl=GB&ceid=GB:en",
+    "SWIFT": f"https://news.google.com/rss/search?q=site:swift.com+when:{MAX_ARTICLE_AGE_DAYS}d&hl=en-GB&gl=GB&ceid=GB:en",
+}
+SCHEME_NEWS_MAX_ITEMS = 8
+# Job adverts and login pages that site-restricted searches pick up.
+SCHEME_NEWS_JUNK = re.compile(
+    r"^\s*(-|(director|senior|manager|vice president|head of|principal|associate|analyst|engineer|specialist|login|careers?|jobs?|case studies)\b)",
+    re.IGNORECASE,
+)
+
+# Tells the model how much weight each source deserves (see SOURCE QUALITY in the prompt).
+SOURCE_TYPES = {
+    "Regulator": ["Bank of England - News", "Bank of England - Publications", "Bank of England - Prudential Regulation",
+                  "FCA - News", "HM Treasury", "ECB - Press Releases", "European Banking Authority", "Financial Stability Board"],
+    "Industry body": ["UK Finance", "The Payments Association"],
+    "Scheme / infrastructure (company-issued, promotional)": ["Visa", "Mastercard", "SWIFT", "EBA Clearing"],
+    "Wire (company-issued press release)": ["Business Wire - Payments"],
+    "Trade press": ["PaymentsSource", "PYMNTS", "Finextra - Payments", "Payments Dive"],
+    "Mainstream press": ["Financial Times - Payments", "Sky News - Business"],
+}
+SOURCE_TYPE_BY_NAME = {name: kind for kind, names in SOURCE_TYPES.items() for name in names}
+
 # ========================================================================================
+
+
+def is_too_old(entry) -> bool:
+    """True if the feed entry has a date older than MAX_ARTICLE_AGE_DAYS. Undated entries are kept."""
+    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not parsed:
+        return False
+    published = datetime.fromtimestamp(calendar.timegm(parsed), tz=timezone.utc)
+    return datetime.now(timezone.utc) - published > timedelta(days=MAX_ARTICLE_AGE_DAYS)
 
 
 def fetch_news():
@@ -179,7 +218,13 @@ def fetch_news():
 
             # Extract articles
             article_count = 0
-            for entry in feed.entries[:articles_per_feed]:
+            too_old = 0
+            for entry in feed.entries:
+                if article_count >= articles_per_feed:
+                    break
+                if is_too_old(entry):
+                    too_old += 1
+                    continue
                 article = {
                     "source": source_name,
                     "title": entry.get("title", "No title"),
@@ -192,7 +237,8 @@ def fetch_news():
                 allArticles.append(article)
                 article_count += 1
 
-            print(f"   ✓ Got {article_count} articles")
+            old_note = f" (skipped {too_old} older than {MAX_ARTICLE_AGE_DAYS} days)" if too_old else ""
+            print(f"   ✓ Got {article_count} articles{old_note}")
 
         except Exception as e:
             print(f"   ✗ Error: {e}")
@@ -246,21 +292,47 @@ def fetch_press_page(url, source_name, max_items=5):
     return items
 
 
+def fetch_scheme_news_feed(source_name, feed_url, max_items=SCHEME_NEWS_MAX_ITEMS):
+    """Scheme announcements via a Google News RSS search limited to the scheme's own site."""
+    feed = feedparser.parse(feed_url)
+    items = []
+    for entry in feed.entries:
+        if len(items) >= max_items:
+            break
+        title = re.sub(r"\s+-\s+[^-]+$", "", entry.get("title", "")).strip()  # drop trailing " - Publisher"
+        if SCHEME_NEWS_JUNK.match(title) or len(title) < 8 or is_too_old(entry):
+            continue
+        items.append(
+            {
+                "source": source_name,
+                "title": title,
+                "link": entry.get("link", ""),
+                "published": entry.get("published", "No date"),
+                "summary": re.sub(r"<[^>]+?>", "", entry.get("summary", "")).strip(),
+                "region": "Global (UK/EMEA relevant)",
+                "scheme": source_name,
+            }
+        )
+    return items
+
+
 def fetch_scheme_press():
     all_items = []
 
-    schemes = [
-        ("https://usa.visa.com/about-visa/newsroom/press-releases.html", "Visa"),
-        ("https://www.mastercard.com/news/press/", "Mastercard"),
-        ("https://www.swift.com/news-events/press-releases", "SWIFT"),
-    ]
+    # Visa's newsroom can be scraped directly.
+    try:
+        all_items += fetch_press_page("https://usa.visa.com/about-visa/newsroom/press-releases.html", "Visa", max_items=4)
+        print("✓ Fetched Visa press releases")
+    except Exception as e:
+        print(f"⚠️  Skipped Visa press releases: {e}")
 
-    for url, name in schemes:
+    for name, feed_url in SCHEME_NEWS_FEEDS.items():
         try:
-            all_items += fetch_press_page(url, name, max_items=4)
-            print(f"✓ Fetched {name} press releases")
+            items = fetch_scheme_news_feed(name, feed_url)
+            all_items += items
+            print(f"✓ Fetched {len(items)} {name} announcements (via news feed)")
         except Exception as e:
-            print(f"⚠️  Skipped {name} press releases: {e}")
+            print(f"⚠️  Skipped {name} announcements: {e}")
 
     return all_items
 
@@ -290,6 +362,7 @@ def build_ai_input_document(articles):
             f"Region: {article.get('region', 'Global')}\n"
             f"Scheme: {article.get('scheme', 'None')}\n"
             f"Source: {article.get('source')}\n"
+            f"Source type: {SOURCE_TYPE_BY_NAME.get(article.get('source'), 'Other')}\n"
             f"Title: {article.get('title')}\n"
             f"Published: {article.get('published')}\n"
             f"Link: {article.get('link')}\n"
@@ -352,22 +425,6 @@ def email_stack(items, gap=10):
     return f'<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">{rows}</table>'
 
 
-def email_frame_open(width=600, pad=16):
-    """Section container. Plain bordered table in Outlook (nesting VML inside VML breaks
-    Word's layout), rounded div everywhere else."""
-    return (
-        # width="100%": Word draws the border outside a fixed width, so a 600px frame was 602px wide
-        # inside its 600px container and its right edge (and the boxes in it) got clipped.
-        f'<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" '
-        f'style="border:1px solid #d1d5db;" role="presentation"><tr><td style="padding:{pad}px;"><![endif]-->'
-        f'<!--[if !mso]><!--><div style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;padding:{pad}px;"><!--<![endif]-->'
-    )
-
-
-def email_frame_close():
-    return "<!--[if mso]></td></tr></table><![endif]--><!--[if !mso]><!--></div><!--<![endif]-->"
-
-
 def email_button(url, text="Read &#8594;"):
     # Original table layout (known to render correctly in Outlook); only change is target="_blank".
     return (
@@ -386,6 +443,7 @@ def parse_stories(block_text: str, email: bool = False) -> str:
         "tag-tech": "background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;",
         "tag-infra": "background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;",
         "tag-macro": "background:#faf5ff;color:#7e22ce;border:1px solid #e9d5ff;",
+        "tag-market": "background:#ecfeff;color:#0e7490;border:1px solid #a5f3fc;",
         "tag-scheme": "background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;",
     }
 
@@ -535,13 +593,13 @@ def parse_key_numbers(block_text: str, email: bool = False) -> str:
         num_color = NUM_COLORS.get(cls, "#2563eb")
         cards.append((val, label, src, num_color, url))
 
-    while len(cards) < 4:
+    while len(cards) < 3:
         cards.append(("—", "No data", "", "#2563eb", "#"))
     cards = cards[:4]
 
     if email:
         # 2x2 grid of rounded boxes; cells carry class="stack" so phones get one column.
-        def cell(c, pad):
+        def cell(c, pad, span=1):
             val, label, src, num_color, url = c
             inner = (
                 f'<p style="margin:0;font-size:26px;font-weight:700;line-height:1.1;{EMAIL_FONT}">'
@@ -550,22 +608,26 @@ def parse_key_numbers(block_text: str, email: bool = False) -> str:
                 f'<p style="margin:4px 0 0;font-size:11px;color:#6b7280;font-style:italic;{EMAIL_FONT}">{src}</p>'
             )
             return (
-                f'<td class="stack" width="50%" valign="top" style="padding:{pad};">'
-                f'{email_box(inner, 292, border="#e5e7eb", pad=14, arc=10)}</td>'
+                f'<td class="stack" width="{"100%" if span == 2 else "50%"}" colspan="{span}" valign="top" style="padding:{pad};">'
+                f'{email_box(inner, EMAIL_CONTENT_W if span == 2 else 292, border="#e5e7eb", pad=14, arc=10)}</td>'
             )
 
+        if len(cards) == 3:  # third card spans the full width
+            last_row = f"<tr>{cell(cards[2], '0', span=2)}</tr>"
+        else:
+            last_row = f"<tr>{cell(cards[2], '0 4px 0 0')}{cell(cards[3], '0 0 0 4px')}</tr>"
         return (
             '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">'
             f"<tr>{cell(cards[0], '0 4px 8px 0')}{cell(cards[1], '0 0 8px 4px')}</tr>"
-            f"<tr>{cell(cards[2], '0 4px 0 0')}{cell(cards[3], '0 0 0 4px')}</tr>"
+            f"{last_row}"
             "</table>"
         )
 
     tds = []
     for i, (val, label, src, num_color, url) in enumerate(cards):
-        right_pad = "padding-right:12px;" if i < 3 else ""
+        right_pad = "padding-right:12px;" if i < len(cards) - 1 else ""
         tds.append(
-            f'<td width="25%" valign="top" height="1" style="{right_pad}">'
+            f'<td width="{100 // len(cards)}%" valign="top" height="1" style="{right_pad}">'
             f'<a href="{url}" target="_blank" rel="noopener noreferrer" style="display:block;height:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;text-decoration:none;color:inherit;box-sizing:border-box;">'
             f'<div style="font-size:24px;font-weight:800;color:{num_color};line-height:1;margin-bottom:3px;">{val}</div>'
             f'<div style="font-size:12px;color:#6b7280;line-height:1.3;">{label}</div>'
@@ -602,6 +664,7 @@ TAKEAWAY_STYLES = {
     "risk": ("#b91c1c", "#fef9f9", "#b91c1c"),
     "tech": ("#15803d", "#f6fef8", "#15803d"),
     "macro": ("#7e22ce", "#fdf8ff", "#7e22ce"),
+    "market": ("#0e7490", "#f3fcfd", "#0e7490"),
     "scheme": ("#065f46", "#f0fdfb", "#065f46"),
 }
 
@@ -743,17 +806,42 @@ def fill_template(template_html: str, mapping: dict) -> str:
 
 
 NEWSLETTER_PROMPT = """
+    AUDIENCE: Accenture payments consultants and leaders in the UK and EMEA, who advise banks, PSPs, schemes
+    and fintechs. They read this digest to spot client conversations, regulation-driven programmes and market shifts.
+    Their work covers: payments and core modernisation; ISO 20022 and rails migration (FPS, Bacs, CHAPS, T2, SEPA Instant,
+    New Payments Architecture); open banking, A2A and VRP; fraud, scams and financial crime; operational resilience
+    (including DORA and third-party/cloud risk); regulatory change programmes; cards and scheme compliance; and AI/agentic
+    payments. Favour stories that create client demand, regulatory deadlines or delivery risk. Skip generic fintech,
+    crypto-price and consumer-product noise.
+
     Be concise and information-dense. Do not over-explain.
     Collapse duplicate stories across sources into a single narrative.
-    Prioritise by payments relevance, not recency. Surface second-order implications.
+    Surface second-order implications.
 
-    Actively look for Visa, Mastercard, SWIFT scheme references even if the source is not the scheme itself.
-    Scheme changes (rules, pricing, access, messaging standards) are always high priority.
+    RECENCY: today is {TODAY}. Use only items published in the last 30 days and ignore anything older, however relevant.
+    Within that window prioritise by payments relevance first, then recency.
 
-    GEOGRAPHIC RULE (CRITICAL): Primary audience is UK and EMEA Payments professionals.
+    SOURCE QUALITY: every article has a "Source type". Treat Regulator and Industry body items as primary evidence.
+    Scheme/infrastructure and Wire items are company-issued and promotional: report them as announcements
+    ("Visa announces...") and never as independent validation or market fact. Prefer a regulator or independent source
+    when one covers the same story. Do not present rumour or unattributed claims as fact.
+    No single company (e.g. Mastercard or Visa) may supply more than two stories across the whole newsletter.
+
+    PRIORITY TOPICS (high priority even when the source is not the owner of the topic):
+    - Card schemes and SWIFT (Visa, Mastercard, SWIFT): rules, pricing, access, messaging standards.
+    - UK rails and policy: Pay.UK (FPS, Bacs, CHAPS, New Payments Architecture), PSR/FCA payments policy and APP fraud
+      reimbursement, open banking and VRP, FCA safeguarding, Bank of England RTGS.
+    - EU/EEA: PSD3 and the Payment Services Regulation, Instant Payments Regulation and Verification of Payee,
+      SEPA Instant, EPI/Wero, digital euro, T2, DORA, EBA and ECB payments work.
+    - Cross-cutting: ISO 20022 migration, stablecoins and tokenised deposits, agentic/AI payments, fraud and scams.
+
+    GEOGRAPHIC RULE (CRITICAL): primary audience is UK and EMEA payments professionals.
     Prioritise UK first, then EMEA. Include global items ONLY with clear UK/EMEA implications.
     Exclude US-only or APAC-only items unless they directly affect UK/EMEA firms
     (e.g. a US Fed rate decision with no BoE response or UK transmission mechanism should be excluded).
+    LEADING-INDICATOR EXCEPTION: TOP_STORIES may include at most ONE global (US/APAC/other) item that is an early signal
+    of a UK/EMEA shift (e.g. a new rail, wallet, stablecoin rule or agentic-payments launch). It MUST carry a GEO line
+    stating the likely UK/EMEA route; if you cannot state one, exclude it.
 
     Return ONLY the blocks below. No markdown. No HTML wrapper tags.
 
@@ -763,9 +851,9 @@ NEWSLETTER_PROMPT = """
     [END]
 
     [BLOCK:KEY_NUMBERS]
-    Exactly 4 cards. Prefer real numbers from the input. Where fewer than 4 exist, fill remaining
-    cards with a regulatory deadline as a date metric (e.g. VAL="30 Sep", LABEL="FCA deadline").
-    Never invent figures. URL must exist in the input document.
+    3-4 cards. Use real numbers from the input only. Never invent figures. Do NOT pad: if only 3 genuine figures or dates
+    exist, return 3. A regulatory deadline from the input or the known events list may be used as a date metric
+    (e.g. VAL="30 Sep", LABEL="FCA deadline"). URL must exist in the input document.
     CLASS: kn-warn=negative/risk, kn-good=positive/growth, kn-brand=neutral.
     Format — one card per block, separated by --- on its own line:
     VAL:VALUE|LABEL:short label|SRC:source name|CLASS:kn-[warn|good|brand]
@@ -774,25 +862,35 @@ NEWSLETTER_PROMPT = """
     [END]
 
     [BLOCK:TOP_STORIES]
-    4–5 stories. UK/EMEA only unless global item has direct UK/EMEA impact.
+    4-5 stories. UK/EMEA only, plus at most one leading-indicator item (see rule above).
     Use compact format — Python renders the HTML:
-    SRC:SOURCE|TAG:tag-[risk|regulatory|tech|infra|macro|scheme]|LABEL:TAG_TEXT
+    SRC:SOURCE|TAG:tag-[risk|regulatory|tech|infra|macro|scheme|market]|LABEL:TAG_TEXT
     HEAD:Headline — max 12 words
     WHY:Why it matters — max 18 words
     TAKE:Key takeaway — max 18 words
-    CONSULT:Specific consulting workstream this creates — max 18 words (omit line entirely if no genuine angle exists)
+    CONSULT:Specific consulting workstream this creates (e.g. ISO 20022 remediation, APP fraud controls, resilience testing) — max 18 words (omit line entirely if no genuine angle exists)
     URL:https://...
     SCHEME:Scheme impact (optional — only for scheme stories)
-    GEO:UK/EMEA relevance (optional — only for global stories)
+    GEO:UK/EMEA relevance (optional — required for the leading-indicator item)
     ---
     [END]
 
-    [BLOCK:RISK]
-    2–3 stories. UK regulators (FCA, PRA, BoE) and EU first. Same compact format as TOP_STORIES.
+    [BLOCK:RESILIENCE]
+    2-3 stories on operational resilience and the risks that threaten it: outages and incidents, operational-resilience
+    and third-party/cloud-concentration rules (FCA/PRA, DORA, critical third parties), plus fraud, scams, financial crime
+    and cyber affecting payments. UK regulators (FCA, PRA, BoE, PSR) and EU first. Same compact format as TOP_STORIES.
+    Use tag-risk, or tag-regulatory when the story is resilience or risk rule-making. Pure compliance or rule-change
+    stories with no resilience or risk angle belong in TOP_STORIES.
     [END]
 
     [BLOCK:MACRO]
-    1–2 stories. Global macro only where UK/EMEA payments firms are directly affected. Same compact format.
+    2-3 stories for "Market & macro". Two kinds only:
+    (a) Market moves: M&A, funding, partnerships and joint ventures, vendor/bank/fintech/PSP deals, pricing or fee changes (tag-market).
+    A scheme's or vendor's own product launch or pilot is NOT a market move: put it in TOP_STORIES (tag-scheme or tag-tech).
+    (b) Macro signals with a direct payments transmission: rates (float and margin), FX and cross-border flows,
+    consumer spend and cash decline, interchange or fee-cap decisions (tag-macro).
+    Include at least one market move when the input has one. Exclude general economic news with no payments link.
+    Same compact format.
     [END]
 
     [BLOCK:EVENTS]
@@ -805,24 +903,32 @@ NEWSLETTER_PROMPT = """
     [END]
 
     [BLOCK:TAKEAWAYS]
-    Exactly 4 cards. One sentence each, max 20 words. Python renders the layout.
-    LABEL: Risk signal | Regulatory deadline | Tech opportunity | Scheme change | Consulting demand | Macro watch
-    TYPE: risk | tech | macro | scheme | default (default for regulatory/consulting)
+    3-4 cards. Only as many as are genuinely useful. One sentence each, max 20 words. Python renders the layout.
+    LABEL: Resilience signal | Regulatory deadline | Tech opportunity | Scheme change | Consulting demand | Market move | Macro watch
+    TYPE: risk | tech | macro | scheme | market | default (default for regulatory/consulting)
     One card per block, separated by --- on its own line:
-    TYPE:[risk|tech|macro|scheme|default]|LABEL:label
+    TYPE:[risk|tech|macro|scheme|market|default]|LABEL:label
     TEXT:the takeaway sentence
     ---
     [END]
 
     [BLOCK:QUICK_LINKS]
-    6–8 links covering both high-signal payments items and any lower-relevance items worth noting.
+    6-8 links. Near-misses only: payments-relevant UK/EMEA stories that almost made a main section, and useful
+    primary-source reads (regulator publications, scheme or rail notices). No off-topic filler and nothing already used above.
     <a href="URL">TITLE</a>
     [END]
 
     Rules:
     - URLs must exist in the input document. Do not invent links.
     - FOCUS_TITLE: max 8 words. FOCUS_SUBTITLE: max 20 words.
-    Tag classes: tag-risk=fraud/crime/cyber | tag-regulatory=FCA/PRA/BoE/EU | tag-tech=ISO20022/rails/AI/cloud | tag-infra=RTGS/CHAPS/network | tag-macro=rates/M&A/macro | tag-scheme=Visa/MC/SWIFT/SEPA/FPS
+    Tag classes (pick the single best fit):
+    tag-risk=outages/operational resilience/third-party risk/fraud/scams/financial crime/cyber |
+    tag-regulatory=rules, consultations, enforcement and deadlines from FCA/PRA/BoE/PSR/HMT/EU |
+    tag-tech=ISO20022/AI/cloud/tokenisation/wallets |
+    tag-infra=payment rails and market infrastructure: FPS/Bacs/CHAPS/RTGS/T2/SEPA/NPA |
+    tag-scheme=Visa/Mastercard/SWIFT/EPI-Wero rules, pricing and products |
+    tag-market=M&A/funding/partnerships/vendor, bank and PSP moves |
+    tag-macro=rates/FX/consumer spend/fee caps with a payments link
     """
 
 
@@ -830,20 +936,20 @@ def build_mapping(blocks: dict, articles: list, provider_label: str, email: bool
     """Template variables for either output. email=True uses the simplified email renderers."""
     focus_title, focus_subtitle = parse_focus(blocks.get("FOCUS", ""))
     focus_title = focus_title or "Payments signals"
-    focus_subtitle = focus_subtitle or "Regulation • Risk • Rails"
-    date_line = f"{datetime.now().strftime('%d %b %Y')} • {len(articles)} items scanned"
+    focus_subtitle = focus_subtitle or "Regulation • Resilience • Rails"
+    date_line = f"{datetime.now().strftime('%d %b %Y')} • {len(articles)} reports summarised"
     footer = escape("Payments News • Auto-generated")
     if not email:
         footer += f' &nbsp;|&nbsp; <span style="font-style:italic;">Generated by {escape(provider_label)}</span>'
 
     return {
-        "TITLE": "Payments Industry Newsletter",
+        "TITLE": "Payments Tech Industry Digest",
         "DATE_LINE": escape(date_line),
         "FOCUS_TITLE": escape(focus_title),
         "FOCUS_SUBTITLE": escape(focus_subtitle),
         "KEY_NUMBERS": parse_key_numbers(blocks.get("KEY_NUMBERS", ""), email),
         "TOP_STORIES": parse_stories(blocks.get("TOP_STORIES", ""), email),
-        "RISK": parse_stories(blocks.get("RISK", ""), email),
+        "RESILIENCE": parse_stories(blocks.get("RESILIENCE", ""), email),
         "MACRO": parse_stories(blocks.get("MACRO", ""), email),
         "EVENTS": parse_events(blocks.get("EVENTS", ""), email),
         "TAKEAWAYS": parse_takeaways(blocks.get("TAKEAWAYS", ""), email),
@@ -949,19 +1055,19 @@ AUTHOR_SECTION_HTML = """
 <table width="100%" cellpadding="22" cellspacing="0" border="0" bgcolor="#ffffff"
   style="background:#ffffff;border:1px solid #d1d5db;border-radius:16px;" role="presentation">
   <tr><td style="font-family:Arial,Helvetica,sans-serif;">
-    <div style="font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;margin-bottom:16px;">Your curators</div>
+    <div style="font-size:16px;font-weight:700;padding-bottom:10px;border-bottom:1px solid #e5e7eb;color:#111827;margin-bottom:16px;">Curators</div>
     <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
       <tr valign="middle">
 
         <!-- Liam Grimwood -->
-        <td width="50%" style="padding-right:16px;">
+        <td width="100%" style="padding-bottom:14px;">
           <table cellpadding="0" cellspacing="0" border="0" role="presentation">
             <tr valign="middle">
-              <td width="64" style="padding-right:12px;">
+              <td width="81" style="padding-right:12px;">
                 <!--[if !mso]><!-->
-                <img src="data:image/jpeg;base64,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" width="52" height="52" alt="Liam Grimwood" style="border-radius:50%;display:block;">
+                <img src="data:image/jpeg;base64,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" width="69" height="69" alt="Liam Grimwood" style="border-radius:50%;display:block;">
                 <!--<![endif]-->
-                <!--[if mso]><table cellpadding="0" cellspacing="0" border="0" width="52" height="52"><tr><td width="52" height="52" align="center" valign="middle" bgcolor="#3A0CA3" style="font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">LG</td></tr></table><![endif]-->
+                <!--[if mso]><table cellpadding="0" cellspacing="0" border="0" width="69" height="69"><tr><td width="69" height="69" align="center" valign="middle" bgcolor="#3A0CA3" style="font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">LG</td></tr></table><![endif]-->
               </td>
               <td>
                 <div style="font-size:14px;font-weight:700;color:#111827;font-family:Arial,Helvetica,sans-serif;">Liam Grimwood</div>
@@ -970,16 +1076,18 @@ AUTHOR_SECTION_HTML = """
             </tr>
           </table>
         </td>
+      </tr>
+      <tr valign="middle">
 
         <!-- Morgan Moloney -->
-        <td width="50%">
+        <td width="100%">
           <table cellpadding="0" cellspacing="0" border="0" role="presentation">
             <tr valign="middle">
-              <td width="64" style="padding-right:12px;">
+              <td width="81" style="padding-right:12px;">
                 <!--[if !mso]><!-->
-                <img src="data:image/jpeg;base64,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" width="52" height="52" alt="Morgan Moloney" style="border-radius:50%;display:block;">
+                <img src="data:image/jpeg;base64,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" width="69" height="69" alt="Morgan Moloney" style="border-radius:50%;display:block;">
                 <!--<![endif]-->
-                <!--[if mso]><table cellpadding="0" cellspacing="0" border="0" width="52" height="52"><tr><td width="52" height="52" align="center" valign="middle" bgcolor="#7F16FF" style="font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">MM</td></tr></table><![endif]-->
+                <!--[if mso]><table cellpadding="0" cellspacing="0" border="0" width="69" height="69"><tr><td width="69" height="69" align="center" valign="middle" bgcolor="#7F16FF" style="font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">MM</td></tr></table><![endif]-->
               </td>
               <td>
                 <div style="font-size:14px;font-weight:700;color:#111827;font-family:Arial,Helvetica,sans-serif;">Morgan Moloney</div>
@@ -1020,12 +1128,12 @@ def author_section_html(email: bool) -> str:
         # Photo: hosted URL if configured, else the embedded base64 (create_outlook_draft.py
         # converts embedded images to inline attachments). No Outlook initials fallback:
         # Word shows the real <img> fine once it is an inline attachment.
-        m = re.search(r'src="(data:image/[^"]+)"\s+width="52"\s+height="52"\s+alt="%s"' % re.escape(name), AUTHOR_SECTION_HTML)
+        m = re.search(r'src="(data:image/[^"]+)"\s+width="69"\s+height="69"\s+alt="%s"' % re.escape(name), AUTHOR_SECTION_HTML)
         src = AUTHOR_PHOTO_URLS.get(name) or (m.group(1) if m else "")
         return (
-            f'<td class="stack" width="50%" valign="middle" style="padding:4px 0;">'
+            f'<td class="stack" width="100%" valign="middle" style="padding:6px 0;">'
             f'<table cellpadding="0" cellspacing="0" border="0" role="presentation"><tr valign="middle">'
-            f'<td width="64" style="padding-right:12px;"><img src="{src}" width="52" height="52" alt="{name}" '
+            f'<td width="81" style="padding-right:12px;"><img src="{src}" width="69" height="69" alt="{name}" '
             f'style="display:block;border-radius:50%;"></td>'
             f'<td style="{EMAIL_FONT}"><p style="margin:0;font-size:14px;font-weight:700;color:#111827;">{name}</p>'
             f'<p style="margin:2px 0 0;font-size:12px;color:#6b7280;">{AUTHOR_ROLES[name]}</p></td>'
@@ -1033,9 +1141,9 @@ def author_section_html(email: bool) -> str:
         )
 
     inner = (
-        f'<p style="margin:0 0 10px;font-size:16px;font-weight:700;color:#111827;{EMAIL_FONT}">Your curators</p>'
-        '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>'
-        f'{person("Liam Grimwood")}{person("Morgan Moloney")}</tr></table>'
+        f'<p style="margin:0 0 10px;font-size:16px;font-weight:700;color:#111827;{EMAIL_FONT}">Curators</p>'
+        '<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">'
+        f'<tr>{person("Liam Grimwood")}</tr><tr>{person("Morgan Moloney")}</tr></table>'
     )
     return email_box(inner, 600, pad=16, arc=6)
 
