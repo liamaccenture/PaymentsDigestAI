@@ -34,7 +34,8 @@ Curators: Liam Grimwood + Morgan Moloney (Manchester Payments Team).
 - **`ANTHROPIC_MODEL`** (line ~25): Currently `claude-sonnet-4-6`.
 - **`RSS_FEEDS`** (lines ~55–85): Dictionary of source name → RSS URL. Covers BoE, FCA, PYMNTS, Payments Dive, UK Finance, FT, Sky News, NilsonReport, etc.
 - **`articlesCountPerFeed`**: Articles fetched per feed (default: 7).
-- **`schemes`**: Payment scheme press release page URLs. Only Visa is active; Mastercard/SWIFT are commented out.
+- **Scheme sources** (`fetch_scheme_press`): Visa is scraped directly. Mastercard and SWIFT block scripted access (403), so they are read via `SCHEME_NEWS_FEEDS` (Google News RSS limited to their own domains).
+- **`MAX_ARTICLE_AGE_DAYS`**: Articles older than this (default 30) are dropped at fetch time; the prompt also enforces the window.
 - **`NEWSLETTER_PROMPT`**: Large system prompt defining newsletter structure, section rules, geographic filters, and word/length constraints.
 - **`OPENAI_MAX_TOKENS`**: Token cap for OpenAI response (default: 8000).
 
@@ -65,7 +66,7 @@ python NewsBot.py
 Two-column layout (60% left / 40% right) using table-based HTML for Outlook compatibility:
 
 - **Left column**: Top Stories
-- **Right column**: Events → Takeaways → Risk → Macro → Further Reading
+- **Right column**: Events → Takeaways → Resilience → Further Reading
   - Further Reading has `flex:1` (CSS) so it stretches to match the left column height — works in browsers; Outlook falls back to natural stacking
 - **Full width below columns**: Authors section (Liam Grimwood + Morgan Moloney), Footer
 
@@ -79,9 +80,9 @@ Hero header shows title, date, focus story, and key stat pills. AI provider labe
 |-------|---------|
 | `FOCUS` | Single headline story (title + subtitle) |
 | `KEY_NUMBERS` | 3–4 stat pills (e.g. transaction volumes, fines) |
-| `TOP_STORIES` | 3–5 curated articles with bullets |
-| `RISK` | Regulatory/compliance stories |
-| `MACRO` | Macro-economic signals relevant to payments |
+| `TOP_STORIES` | 4–5 curated articles with bullets (max one global leading-indicator item) |
+| `RESILIENCE` | Operational resilience and risk: outages, third-party/cloud risk, fraud, financial crime, cyber |
+| `MACRO` | "Market & macro": market moves (M&A, funding, partnerships, pricing) and macro signals with a payments link (rates, FX, fee caps) |
 | `EVENTS` | Upcoming industry events table |
 | `TAKEAWAYS` | Executive summary bullets |
 | `QUICK_LINKS` | Short-form links to additional stories |
@@ -132,5 +133,5 @@ Email delivery (task 6) is not yet wired up — for now, download artifacts from
 ## Known Issues / TODOs
 
 1. **Email sending**: `smtplib` is imported but not implemented. Next task — configure SMTP delivery to Liam and Morgan first, then wider distribution list.
-2. **Mastercard/SWIFT press pages**: Commented out in `schemes` list — to be re-enabled.
+2. **Mastercard/SWIFT**: Fetched via Google News RSS (their sites return 403). Items are title-only with Google redirect links; revisit if a direct feed becomes available.
 3. **Outlook column alignment**: CSS flexbox aligns column bottoms in browsers; Outlook renders natural table stacking (right column may end slightly shorter than left — acceptable).

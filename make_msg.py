@@ -108,7 +108,7 @@ def build_msg(html_path: str, msg_path: str | None = None, subject: str | None =
         return f'src="cid:{cid}"'
 
     html = re.sub(r'src="data:image/(jpeg|png|gif);base64,([^"]+)"', to_cid, html)
-    subject = subject or f"Payments Industry Newsletter — {datetime.now().strftime('%d %b %Y')}"
+    subject = subject or f"Payments Tech Industry Digest — {datetime.now().strftime('%d %b %Y')}"
 
     w = OleWriter()
     # Required (empty) named-property mapping storage.
