@@ -35,9 +35,9 @@ Curators: Liam Grimwood + Morgan Moloney (Manchester Payments Team).
 - **Testing only** (a normal run always gathers fresh data and saves nothing extra): `NEWSBOT_SAVE_INPUT=1` saves the model input to `GeneratedInputs/` (git-ignored); `NEWSBOT_INPUT_FILE=<path>` replays a saved input for like-for-like model/prompt comparison.
 - **`KEY_NUMBERS` `NOTE` field**: optional short context under a stat card (e.g. "Up 0.25 percentage points"); must come from the input.
 - **`ANTHROPIC_MODEL`** (line ~25): Currently `claude-sonnet-4-6`.
-- **`RSS_FEEDS`** (lines ~55–85): Dictionary of source name → RSS URL. Covers BoE, FCA, PYMNTS, Payments Dive, UK Finance, FT, Sky News, NilsonReport, etc.
+- **`RSS_FEEDS`** (lines ~55–85): Dictionary of source name → RSS URL. Covers BoE, FCA, ECB, PYMNTS, Payments Dive, Electronic Payments International, UK Finance, Pay.UK, EMA, EPC, FT, Sky News, etc. Each organisation counts as one source (all BoE feeds = "Bank of England") for the prompt's per-organisation story caps.
 - **`articlesCountPerFeed`**: Articles fetched per feed (default: 7).
-- **Scheme sources** (`fetch_scheme_press`): Visa is scraped directly. Mastercard and SWIFT block scripted access (403), so they are read via `SCHEME_NEWS_FEEDS` (Google News RSS limited to their own domains).
+- **Scheme sources** (`fetch_scheme_press`): Visa is read from its own press-release RSS (`VISA_PRESS_FEED`). Mastercard and SWIFT block scripted access (403), so they are read via `SCHEME_NEWS_FEEDS` (Google News RSS limited to their own domains).
 - **`MAX_ARTICLE_AGE_DAYS`**: Articles older than this (default 30) are dropped at fetch time; the prompt also enforces the window.
 - **`NEWSLETTER_PROMPT`**: Large system prompt defining newsletter structure, section rules, geographic filters, and word/length constraints.
 - **`OPENAI_MAX_TOKENS`**: Token cap for OpenAI response (default: 8000).

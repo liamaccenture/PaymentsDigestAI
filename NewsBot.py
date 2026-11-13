@@ -121,8 +121,12 @@ RSS_FEEDS = {
     "The Payments Association": "https://www.thepaymentsassociation.org/feed/",
     "Business Wire - Payments": "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJaF1hQWA==",
     "Payments Dive": "https://www.paymentsdive.com/feeds/news/",
-    # ===== UK FINANCIAL SERVICES =====
+    "Electronic Payments International": "https://www.electronicpaymentsinternational.com/feed/",
+    # ===== UK FINANCIAL SERVICES & PAYMENT BODIES =====
     "UK Finance": "https://www.ukfinance.org.uk/rss.xml",
+    "Pay.UK": "https://www.wearepay.uk/feed/",
+    "Electronic Money Association": "https://e-ma.org/feed/",
+    "European Payments Council": "https://www.europeanpaymentscouncil.eu/rss.xml",
     # ===== INFRASTRUCTURE & NETWORKS =====
     "EBA Clearing": "https://www.ebaclearing.eu/feed/",
     # ===== GENERAL FINANCIAL NEWS =====
@@ -147,6 +151,7 @@ SCHEME_NEWS_FEEDS = {
     "SWIFT": f"https://news.google.com/rss/search?q=site:swift.com+when:{MAX_ARTICLE_AGE_DAYS}d&hl=en-GB&gl=GB&ceid=GB:en",
 }
 SCHEME_NEWS_MAX_ITEMS = 8
+VISA_PRESS_FEED = "https://investor.visa.com/rss/pressrelease.aspx"
 # Job adverts and login pages that site-restricted searches pick up.
 SCHEME_NEWS_JUNK = re.compile(
     r"^\s*(-|(director|senior|manager|vice president|head of|principal|associate|analyst|engineer|specialist|login|careers?|jobs?|case studies)\b)",
@@ -157,10 +162,11 @@ SCHEME_NEWS_JUNK = re.compile(
 SOURCE_TYPES = {
     "Regulator": ["Bank of England - News", "Bank of England - Publications", "Bank of England - Prudential Regulation",
                   "FCA - News", "HM Treasury", "ECB - Press Releases", "European Banking Authority", "Financial Stability Board"],
-    "Industry body": ["UK Finance", "The Payments Association"],
+    "Industry body": ["UK Finance", "The Payments Association", "Pay.UK", "Electronic Money Association",
+                      "European Payments Council"],
     "Scheme / infrastructure (company-issued, promotional)": ["Visa", "Mastercard", "SWIFT", "EBA Clearing"],
     "Wire (company-issued press release)": ["Business Wire - Payments"],
-    "Trade press": ["PaymentsSource", "PYMNTS", "Finextra - Payments", "Payments Dive"],
+    "Trade press": ["PaymentsSource", "PYMNTS", "Finextra - Payments", "Payments Dive", "Electronic Payments International"],
     "Mainstream press": ["Financial Times - Payments", "Sky News - Business"],
 }
 SOURCE_TYPE_BY_NAME = {name: kind for kind, names in SOURCE_TYPES.items() for name in names}
@@ -173,7 +179,6 @@ FULLTEXT_MAX_ARTICLES = 40   # cap on pages fetched per run (bounds both time an
 FULLTEXT_MAX_PER_SOURCE = 4  # so one prolific feed can't use the whole budget
 FULLTEXT_THIN_BELOW = 600    # only enrich items whose feed summary is shorter than this (chars)
 FULLTEXT_MAX_CHARS = 2500    # body text kept per article (~600 tokens)
-FULLTEXT_SOURCE_WEIGHT = {"Regulator": 3, "Industry body": 2, "Trade press": 1}
 FULLTEXT_KEYWORDS = re.compile(
     r"payment|rtgs|fps|bacs|chaps|iso 20022|sepa|psd3|open banking|vrp|fraud|scam|resilien|dora|"
     r"stablecoin|tokeni|wholesale|infrastructure|settlement|clearing|swift|visa|mastercard|"
@@ -292,6 +297,35 @@ def fetch_full_text(url: str, max_chars: int = FULLTEXT_MAX_CHARS) -> str:
         return ""
 
 
+def organisation(article: dict) -> str:
+    """Publishing organisation, so 'Bank of England - News/Publications/Prudential' count as one."""
+    return (article.get("source") or "").split(" - ")[0].strip()
+
+
+_TITLE_STOP = set(
+    "the a an and or of to in on for with from by at as is are be its it this that new says say "
+    "will after over into about their more than has have not but out up how why what who".split()
+)
+
+
+def add_coverage_counts(articles: list) -> None:
+    """Hint for 'is this already well known?': how many OTHER organisations ran a similar headline.
+
+    Crude token overlap, so it undercounts when headlines are worded differently; the prompt treats it
+    as a hint only. 0 means only one organisation in the input covers the story."""
+    def tokens(a):
+        words = re.findall(r"[a-z0-9]{4,}", (a.get("title") or "").lower())
+        return {w for w in words if w not in _TITLE_STOP}
+
+    toks = [tokens(a) for a in articles]
+    for i, a in enumerate(articles):
+        orgs = set()
+        for j, b in enumerate(articles):
+            if i != j and organisation(b) != organisation(a) and len(toks[i] & toks[j]) >= 3:
+                orgs.add(organisation(b))
+        a["also_reported_by"] = len(orgs)
+
+
 def enrich_articles(articles: list) -> list:
     """Replace thin feed summaries with article body text for the most relevant items."""
     if not FULLTEXT_ENABLED:
@@ -301,26 +335,24 @@ def enrich_articles(articles: list) -> list:
         return len(re.sub(r"<[^>]+?>", "", a.get("summary", "")).strip())
 
     def score(a):
-        kind = SOURCE_TYPE_BY_NAME.get(a.get("source"), "")
-        weight = next((w for k, w in FULLTEXT_SOURCE_WEIGHT.items() if kind.startswith(k)), 0)
-        hits = len(FULLTEXT_KEYWORDS.findall(a.get("title", "")))
-        return weight * 2 + min(hits, 3)
+        # Topic relevance only. Deliberately NOT weighted by source type: giving regulators the
+        # richest text made the model favour them (BoE filled ~40% of story slots).
+        return min(len(FULLTEXT_KEYWORDS.findall(a.get("title", ""))), 3)
 
     candidates = [
         a for a in articles
         if a.get("link", "").startswith("http")
         and "news.google.com" not in a["link"]  # redirect pages have no article body
         and clean_len(a) < FULLTEXT_THIN_BELOW
-        and score(a) > 0
     ]
     candidates.sort(key=score, reverse=True)
-    # Spread the budget round-robin: every source's best item first, then each source's second best,
-    # and so on (max N per source), so one prolific feed can't crowd out the others.
+    # Spread the budget round-robin by ORGANISATION (all Bank of England feeds count as one): every
+    # organisation's best item first, then each one's second best, and so on.
     per_source: dict = {}
     ranked = []
     for a in candidates:
-        rank = per_source.get(a["source"], 0)
-        per_source[a["source"]] = rank + 1
+        rank = per_source.get(organisation(a), 0)
+        per_source[organisation(a)] = rank + 1
         if rank < FULLTEXT_MAX_PER_SOURCE:
             ranked.append((rank, -score(a), a))
     ranked.sort(key=lambda t: (t[0], t[1]))
@@ -384,14 +416,17 @@ def fetch_press_page(url, source_name, max_items=5):
     return items
 
 
-def fetch_scheme_news_feed(source_name, feed_url, max_items=SCHEME_NEWS_MAX_ITEMS):
-    """Scheme announcements via a Google News RSS search limited to the scheme's own site."""
+def fetch_scheme_news_feed(source_name, feed_url, max_items=SCHEME_NEWS_MAX_ITEMS, google_news=True):
+    """Scheme announcements from an RSS feed (Google News search limited to the scheme's own site,
+    or a scheme's own feed when google_news=False)."""
     feed = feedparser.parse(feed_url)
     items = []
     for entry in feed.entries:
         if len(items) >= max_items:
             break
-        title = re.sub(r"\s+-\s+[^-]+$", "", entry.get("title", "")).strip()  # drop trailing " - Publisher"
+        title = entry.get("title", "").strip()
+        if google_news:
+            title = re.sub(r"\s+-\s+[^-]+$", "", title).strip()  # drop trailing " - Publisher"
         if SCHEME_NEWS_JUNK.match(title) or len(title) < 8 or is_too_old(entry):
             continue
         items.append(
@@ -411,10 +446,12 @@ def fetch_scheme_news_feed(source_name, feed_url, max_items=SCHEME_NEWS_MAX_ITEM
 def fetch_scheme_press():
     all_items = []
 
-    # Visa's newsroom can be scraped directly.
+    # Visa publishes its own press-release RSS (the old HTML scrape only returned page headings
+    # such as "Press releases" / "Media kits").
     try:
-        all_items += fetch_press_page("https://usa.visa.com/about-visa/newsroom/press-releases.html", "Visa", max_items=4)
-        print("✓ Fetched Visa press releases")
+        items = fetch_scheme_news_feed("Visa", VISA_PRESS_FEED, max_items=SCHEME_NEWS_MAX_ITEMS, google_news=False)
+        all_items += items
+        print(f"✓ Fetched {len(items)} Visa press releases")
     except Exception as e:
         print(f"⚠️  Skipped Visa press releases: {e}")
 
@@ -443,6 +480,7 @@ def build_ai_input_document(articles):
         known_block += f"Date: {ev['date']} | Event: {ev['event']} | Type: {ev['type']} | URL: {ev['url']} | Relevance: {ev['relevance']}\n"
     lines.append(known_block)
 
+    add_coverage_counts(articles)
     for i, article in enumerate(articles, 1):
         # Clean summary (RSS summaries can be HTML)
         summary = re.sub(r"<[^>]+?>", "", article.get("summary", "")).strip()
@@ -457,6 +495,7 @@ def build_ai_input_document(articles):
             f"Source type: {SOURCE_TYPE_BY_NAME.get(article.get('source'), 'Other')}\n"
             f"Title: {article.get('title')}\n"
             f"Published: {article.get('published')}\n"
+            f"Also reported by: {article.get('also_reported_by', 0)} other organisation(s)\n"
             f"Link: {article.get('link')}\n"
             f"Summary: {summary}\n"
         )
@@ -937,6 +976,23 @@ NEWSLETTER_PROMPT = """
     ("Visa announces...") and never as independent validation or market fact. Prefer a regulator or independent source
     when one covers the same story. Do not present rumour or unattributed claims as fact.
     No single company (e.g. Mastercard or Visa) may supply more than two stories across the whole newsletter.
+
+    IMPACT OVER SOURCE (CRITICAL): choose stories by their impact on UK/EMEA payments firms and their clients,
+    whoever reported them. Regulator status is not a reason to include an item: a consultation, speech or
+    forum minute with no change to rules, cost, delivery or risk is low impact. Trade press, industry bodies,
+    schemes and mainstream press can carry the highest-impact stories (market moves, outages, enforcement, product
+    launches, deals). Treat one organisation's feeds as one source (all Bank of England feeds = "Bank of England").
+    No single organisation may supply more than TWO stories in TOP_STORIES and THREE across the whole newsletter
+    (FOCUS, TOP_STORIES, RESILIENCE, MACRO). If more than two of its items are high impact, keep the best two and
+    put the rest in QUICK_LINKS. Aim for TOP_STORIES to draw on at least three different organisations.
+
+    AWARENESS (CRITICAL): readers follow the headline news already, so the digest earns its place by surfacing what
+    they probably have NOT seen. Each article shows "Also reported by: N other organisation(s)". A high N means the
+    story is widely known: include it only if it is genuinely major, give the angle readers will not have already
+    (consequence, implementation detail, who is exposed) instead of recapping the headline, and use at most ONE such
+    item in TOP_STORIES. Favour high-impact items with a low N: primary-source detail, under-reported rule or pricing
+    changes, early signals, enforcement and incident reports, niche but material items for UK/EMEA payments.
+    N is only a hint (it undercounts); use judgement.
 
     PRIORITY TOPICS (high priority even when the source is not the owner of the topic):
     - Card schemes and SWIFT (Visa, Mastercard, SWIFT): rules, pricing, access, messaging standards.
