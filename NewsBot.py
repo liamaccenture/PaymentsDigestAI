@@ -21,8 +21,10 @@ LLM_PROVIDER = "openai"
 
 # Model names (change here to upgrade/downgrade)
 # OPENAI_MODEL    = "gpt-5.5"               # TEMP: trialling gpt-5.5 — better capability + token efficiency
-# OPENAI_MODEL = "gpt-5.6-terra"  # TEMP: trialling gpt-5.6 terra — better capability + token efficiency
-OPENAI_MODEL    = "gpt-5.6-luna"               # TEMP: trialling gpt-5.6 Luna — token efficiency
+# Default is luna: with full-text enrichment (see enrich_articles) it matches terra's specificity at ~1/10 the cost.
+# For a one-off test of another model without editing this file: NEWSBOT_MODEL=gpt-5.6-terra python NewsBot.py
+OPENAI_MODEL = os.environ.get("NEWSBOT_MODEL", "gpt-5.6-luna")
+# OPENAI_MODEL = "gpt-5.6-terra"  # previous default — better depth on thin RSS snippets, ~10x the cost
 # OPENAI_MODEL  = "gpt-4o-mini"           # previous model — uncomment to revert (~40x cheaper)
 ANTHROPIC_MODEL = (
     "claude-sonnet-4-6"  # alt: "claude-haiku-4-5-20251001", "claude-opus-4-6"
@@ -163,6 +165,23 @@ SOURCE_TYPES = {
 }
 SOURCE_TYPE_BY_NAME = {name: kind for kind, names in SOURCE_TYPES.items() for name in names}
 
+# ── FULL-TEXT ENRICHMENT ────────────────────────────────────────────────────────────────
+# Most RSS feeds give only a headline and one sentence (median ~160 chars), so a cheap model has to
+# guess scale and detail. For the most relevant thin items we fetch the article body instead.
+FULLTEXT_ENABLED = True
+FULLTEXT_MAX_ARTICLES = 40   # cap on pages fetched per run (bounds both time and input tokens)
+FULLTEXT_MAX_PER_SOURCE = 4  # so one prolific feed can't use the whole budget
+FULLTEXT_THIN_BELOW = 600    # only enrich items whose feed summary is shorter than this (chars)
+FULLTEXT_MAX_CHARS = 2500    # body text kept per article (~600 tokens)
+FULLTEXT_SOURCE_WEIGHT = {"Regulator": 3, "Industry body": 2, "Trade press": 1}
+FULLTEXT_KEYWORDS = re.compile(
+    r"payment|rtgs|fps|bacs|chaps|iso 20022|sepa|psd3|open banking|vrp|fraud|scam|resilien|dora|"
+    r"stablecoin|tokeni|wholesale|infrastructure|settlement|clearing|swift|visa|mastercard|"
+    r"digital euro|quantum|cyber|outage|safeguarding|consult|bank rate|monetary policy|interest rate|"
+    r"inflation|\bmpc\b|fee cap|interchange|fine[ds]?\b|penalt",
+    re.IGNORECASE,
+)
+
 # ========================================================================================
 
 
@@ -249,6 +268,79 @@ def fetch_news():
     print(f"{'='*70}")
 
     return allArticles
+
+
+def fetch_full_text(url: str, max_chars: int = FULLTEXT_MAX_CHARS) -> str:
+    """Best-effort article body text. Returns '' on any failure (paywall, 403, non-HTML...)."""
+    try:
+        r = requests.get(
+            url,
+            timeout=12,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; PaymentsNewsBot/1.0)"},
+        )
+        r.raise_for_status()
+        if "html" not in r.headers.get("Content-Type", "html"):
+            return ""
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
+            tag.decompose()
+        root = soup.find("article") or soup.find("main") or soup.body or soup
+        paras = [p.get_text(" ", strip=True) for p in root.find_all(["p", "li"])]
+        text = " ".join(p for p in paras if len(p) > 40)  # drop menu/cookie crumbs
+        return re.sub(r"\s+", " ", text)[:max_chars]
+    except Exception:
+        return ""
+
+
+def enrich_articles(articles: list) -> list:
+    """Replace thin feed summaries with article body text for the most relevant items."""
+    if not FULLTEXT_ENABLED:
+        return articles
+
+    def clean_len(a):
+        return len(re.sub(r"<[^>]+?>", "", a.get("summary", "")).strip())
+
+    def score(a):
+        kind = SOURCE_TYPE_BY_NAME.get(a.get("source"), "")
+        weight = next((w for k, w in FULLTEXT_SOURCE_WEIGHT.items() if kind.startswith(k)), 0)
+        hits = len(FULLTEXT_KEYWORDS.findall(a.get("title", "")))
+        return weight * 2 + min(hits, 3)
+
+    candidates = [
+        a for a in articles
+        if a.get("link", "").startswith("http")
+        and "news.google.com" not in a["link"]  # redirect pages have no article body
+        and clean_len(a) < FULLTEXT_THIN_BELOW
+        and score(a) > 0
+    ]
+    candidates.sort(key=score, reverse=True)
+    # Spread the budget round-robin: every source's best item first, then each source's second best,
+    # and so on (max N per source), so one prolific feed can't crowd out the others.
+    per_source: dict = {}
+    ranked = []
+    for a in candidates:
+        rank = per_source.get(a["source"], 0)
+        per_source[a["source"]] = rank + 1
+        if rank < FULLTEXT_MAX_PER_SOURCE:
+            ranked.append((rank, -score(a), a))
+    ranked.sort(key=lambda t: (t[0], t[1]))
+    candidates = [a for _, _, a in ranked[:FULLTEXT_MAX_ARTICLES]]
+    if not candidates:
+        return articles
+
+    print(f"\nFetching full text for {len(candidates)} thin-snippet articles...")
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        texts = list(pool.map(lambda a: fetch_full_text(a["link"]), candidates))
+
+    enriched = 0
+    for a, text in zip(candidates, texts):
+        if len(text) > clean_len(a) + 200:  # only if it genuinely adds information
+            a["summary"] = text
+            enriched += 1
+    print(f"✓ Enriched {enriched}/{len(candidates)} articles with full text")
+    return articles
 
 
 def fetch_press_page(url, source_name, max_items=5):
@@ -590,21 +682,28 @@ def parse_key_numbers(block_text: str, email: bool = False) -> str:
         src = escape(fields.get("SRC", ""))
         cls = fields.get("CLASS", "kn-brand")
         url = fields.get("URL", "#")
+        note = escape(fields.get("NOTE", ""))
         num_color = NUM_COLORS.get(cls, "#2563eb")
-        cards.append((val, label, src, num_color, url))
+        cards.append((val, label, src, num_color, url, note))
 
     while len(cards) < 3:
-        cards.append(("—", "No data", "", "#2563eb", "#"))
+        cards.append(("—", "No data", "", "#2563eb", "#", ""))
     cards = cards[:4]
 
     if email:
         # 2x2 grid of rounded boxes; cells carry class="stack" so phones get one column.
         def cell(c, pad, span=1):
-            val, label, src, num_color, url = c
+            val, label, src, num_color, url, note = c
+            note_html = (
+                f'<p style="margin:2px 0 0;font-size:12px;color:#4b5563;{EMAIL_FONT}">{note}</p>'
+                if note
+                else ""
+            )
             inner = (
                 f'<p style="margin:0;font-size:26px;font-weight:700;line-height:1.1;{EMAIL_FONT}">'
                 f'<a href="{url}" style="color:{num_color};text-decoration:none;">{val}</a></p>'
                 f'<p style="margin:4px 0 0;font-size:13px;color:#374151;{EMAIL_FONT}">{label}</p>'
+                f"{note_html}"
                 f'<p style="margin:4px 0 0;font-size:11px;color:#6b7280;font-style:italic;{EMAIL_FONT}">{src}</p>'
             )
             return (
@@ -624,13 +723,19 @@ def parse_key_numbers(block_text: str, email: bool = False) -> str:
         )
 
     tds = []
-    for i, (val, label, src, num_color, url) in enumerate(cards):
+    for i, (val, label, src, num_color, url, note) in enumerate(cards):
         right_pad = "padding-right:12px;" if i < len(cards) - 1 else ""
+        note_html = (
+            f'<div style="font-size:11px;color:#4b5563;line-height:1.3;margin-top:2px;">{note}</div>'
+            if note
+            else ""
+        )
         tds.append(
             f'<td width="{100 // len(cards)}%" valign="top" height="1" style="{right_pad}">'
             f'<a href="{url}" target="_blank" rel="noopener noreferrer" style="display:block;height:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;text-decoration:none;color:inherit;box-sizing:border-box;">'
             f'<div style="font-size:24px;font-weight:800;color:{num_color};line-height:1;margin-bottom:3px;">{val}</div>'
             f'<div style="font-size:12px;color:#6b7280;line-height:1.3;">{label}</div>'
+            f"{note_html}"
             f'<div style="font-size:10px;color:#6b7280;margin-top:5px;font-style:italic;">{src}</div>'
             f"</a>"
             f"</td>"
@@ -818,6 +923,12 @@ NEWSLETTER_PROMPT = """
     Collapse duplicate stories across sources into a single narrative.
     Surface second-order implications.
 
+    SPECIFICITY AND SCALE (CRITICAL): readers are consultants who size programmes of work. Never flatten a significant
+    change into a generic label. State the nature and magnitude of the change, using the input's own wording: e.g.
+    "large-scale transformation of the RTGS/payments infrastructure" and not "operational changes"; "sector-wide, multi-year
+    migration" and not "updates". Prefer concrete nouns, numbers, dates, named schemes and affected participants over
+    vague verbs. If the input does not support a claim about scale, do not invent one, but never understate what it does say.
+
     RECENCY: today is {TODAY}. Use only items published in the last 30 days and ignore anything older, however relevant.
     Within that window prioritise by payments relevance first, then recency.
 
@@ -857,7 +968,15 @@ NEWSLETTER_PROMPT = """
     CLASS: kn-warn=negative/risk, kn-good=positive/growth, kn-brand=neutral.
     Format — one card per block, separated by --- on its own line:
     VAL:VALUE|LABEL:short label|SRC:source name|CLASS:kn-[warn|good|brand]
+    NOTE:short context line, max 8 words (OPTIONAL)
     URL:https://...
+    NOTE rule: a NOTE is REQUIRED whenever the figure is a rate, price, volume, fine or other measure that has moved
+    and the input (the same article OR any other article in the input, e.g. the story that explains the move) states the
+    previous value or direction: write the change, e.g. "Up from 3.75%" or "Down from 4.00%". Rates, fees and fines
+    almost always qualify, so search the input for the prior value before leaving a rate card without a NOTE.
+    Also use a NOTE for a comparison or what a date/deadline applies to. Omit the line only for cards where no
+    context exists in the input (e.g. a plain date). The context MUST come from the input document. Never use memory
+    or outside knowledge for a previous value.
     ---
     [END]
 
@@ -963,6 +1082,21 @@ def build_mapping(blocks: dict, articles: list, provider_label: str, email: bool
 
 def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
     document = build_ai_input_document(articles)
+    # TESTING ONLY — a normal run always uses freshly gathered data and writes nothing extra.
+    #   NEWSBOT_SAVE_INPUT=1        save this run's model input to GeneratedInputs/
+    #   NEWSBOT_INPUT_FILE=<path>   replay a saved input instead of the fresh data (model/prompt A/B tests)
+    replay = os.environ.get("NEWSBOT_INPUT_FILE")
+    if replay:
+        with open(replay, encoding="utf-8") as f:
+            document = f.read()
+        print(f"↻ Replaying saved input: {replay}")
+    elif os.environ.get("NEWSBOT_SAVE_INPUT") == "1":
+        inputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeneratedInputs")
+        os.makedirs(inputs_dir, exist_ok=True)
+        input_path = os.path.join(inputs_dir, f"AIInput_{datetime.now():%d-%m-%y_%H-%M}.txt")
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write(document)
+        print(f"🗒️  Saved model input: GeneratedInputs/{os.path.basename(input_path)}")
     today_str = datetime.now().strftime("%d %b %Y")
     prompt = NEWSLETTER_PROMPT.replace("{TODAY}", today_str)
 
@@ -1182,6 +1316,8 @@ if __name__ == "__main__":
     scheme_articles = fetch_scheme_press()
 
     articles.extend(scheme_articles)
+    if articles and not os.environ.get("NEWSBOT_INPUT_FILE"):
+        articles = enrich_articles(articles)
 
     if not articles:
         print("\n❌ No articles found!")

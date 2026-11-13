@@ -30,7 +30,10 @@ Curators: Liam Grimwood + Morgan Moloney (Manchester Payments Team).
 ## Key Configuration (in NewsBot.py)
 
 - **`LLM_PROVIDER`** (line ~18): `"openai"` or `"anthropic"` — controls which API is called.
-- **`OPENAI_MODEL`** (line ~22): Currently `gpt-5.6-terra`. Change here to switch model.
+- **`OPENAI_MODEL`** (line ~22): Currently `gpt-5.6-luna` (cheapest; enough once full-text enrichment is on). Change here to switch model, or set `NEWSBOT_MODEL=<model>` for a one-off run.
+- **Full-text enrichment** (`enrich_articles`, `FULLTEXT_*`): most RSS snippets are ~160 chars, so the top thin-snippet items (max 40, round-robin across sources) have their article body fetched. This is what gives the cheap model enough detail to be specific.
+- **Testing only** (a normal run always gathers fresh data and saves nothing extra): `NEWSBOT_SAVE_INPUT=1` saves the model input to `GeneratedInputs/` (git-ignored); `NEWSBOT_INPUT_FILE=<path>` replays a saved input for like-for-like model/prompt comparison.
+- **`KEY_NUMBERS` `NOTE` field**: optional short context under a stat card (e.g. "Up 0.25 percentage points"); must come from the input.
 - **`ANTHROPIC_MODEL`** (line ~25): Currently `claude-sonnet-4-6`.
 - **`RSS_FEEDS`** (lines ~55–85): Dictionary of source name → RSS URL. Covers BoE, FCA, PYMNTS, Payments Dive, UK Finance, FT, Sky News, NilsonReport, etc.
 - **`articlesCountPerFeed`**: Articles fetched per feed (default: 7).
