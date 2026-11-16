@@ -10,6 +10,7 @@ from html import escape
 import requests
 from bs4 import BeautifulSoup
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -71,38 +72,65 @@ PRICING = {
     "claude-opus-4-6": (15.0 / 1_000_000, 75.00 / 1_000_000),
 }
 
-# Known regulatory events to always surface in the EVENTS section.
-# Keep this list current — the AI will drop past dates automatically via the prompt rule.
-KNOWN_EVENTS = [
-    {
-        "date": "30 Sep 2026",
-        "event": "UK cryptoasset authorisation gateway opens",
-        "type": "reg",
-        "url": "https://www.fca.org.uk/",
-        "relevance": "High",
-    },
-    {
-        "date": "Nov 2026",
-        "event": "STEP2 DKK go-live (EBA Clearing)",
-        "type": "infra",
-        "url": "https://www.ebaclearing.eu/",
-        "relevance": "High",
-    },
-    {
-        "date": "1 Jan 2027",
-        "event": "Basel 3.1 UK go-live",
-        "type": "reg",
-        "url": "https://www.bankofengland.co.uk/",
-        "relevance": "High",
-    },
-    {
-        "date": "25 Oct 2027",
-        "event": "UK cryptoasset full regime enters force",
-        "type": "reg",
-        "url": "https://www.fca.org.uk/",
-        "relevance": "High",
-    },
-]
+# Tracked events: auto-populated, not hand-maintained. Each run saves the future-dated events the
+# model finds (with an exact ISO date) to KnownEvents.json; the next run feeds them back in so they
+# survive the article age window, and they drop out once the date has passed. In CI the workflow
+# commits the file back to the repo so the list persists between runs.
+EVENTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "KnownEvents.json")
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+
+
+def load_events() -> list:
+    """Stored events whose date has not passed, soonest first. Missing/corrupt file = empty list."""
+    try:
+        with open(EVENTS_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return []
+    today = datetime.now().strftime("%Y-%m-%d")
+    events = [e for e in raw if isinstance(e, dict) and e.get("iso", "") >= today and e.get("event")]
+    return sorted(events, key=lambda e: e["iso"])
+
+
+def update_event_store(events_block: str, document: str) -> int:
+    """Merge the model's EVENTS block into KnownEvents.json. Returns the number of new events.
+
+    Guards against invented events: needs a valid future ISO date and a URL that appears in the input."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    stored = load_events()
+    added = 0
+    for card in _parse_cards(events_block):
+        iso, name, url = card.get("ISO", ""), card.get("EVENT", ""), card.get("URL", "")
+        try:
+            datetime.strptime(iso, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if iso < today or not name or not url or url not in document:
+            continue
+        key = _norm_name(name)
+        if any(e["iso"] == iso and (_norm_name(e["event"]) in key or key in _norm_name(e["event"])) for e in stored):
+            continue
+        stored.append(
+            {
+                "date": card.get("DATE", iso),
+                "iso": iso,
+                "event": name,
+                "type": card.get("TYPE", "reg"),
+                "url": url,
+                "relevance": card.get("REL", "Medium"),
+                "first_seen": today,
+            }
+        )
+        added += 1
+    stored.sort(key=lambda e: e["iso"])
+    with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stored, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    return added
+
 
 RSS_FEEDS = {
     # ===== CENTRAL BANKS & REGULATORS =====
@@ -138,10 +166,11 @@ RSS_FEEDS = {
 # 'SWIFT':          'https://www.swift.com/news-events/rss'  — unstable, do not use
 # 'Fintech Weekly': 'https://www.fintechweekly.com/feed/'    — low signal
 
-articles_per_feed = 7
+# Fortnightly cadence: prolific feeds publish ~12-16 items/week, so 7 only reached back ~3 days.
+articles_per_feed = 15
 
 # Only articles published within this many days are kept (undated items are kept).
-MAX_ARTICLE_AGE_DAYS = 30
+MAX_ARTICLE_AGE_DAYS = 14  # newsletter is sent fortnightly
 
 # Mastercard and SWIFT block scripted access to their own newsrooms (HTTP 403, including with a
 # browser User-Agent), so their announcements are read through Google News RSS, restricted to each
@@ -150,7 +179,7 @@ SCHEME_NEWS_FEEDS = {
     "Mastercard": f"https://news.google.com/rss/search?q=site:mastercard.com+when:{MAX_ARTICLE_AGE_DAYS}d&hl=en-GB&gl=GB&ceid=GB:en",
     "SWIFT": f"https://news.google.com/rss/search?q=site:swift.com+when:{MAX_ARTICLE_AGE_DAYS}d&hl=en-GB&gl=GB&ceid=GB:en",
 }
-SCHEME_NEWS_MAX_ITEMS = 8
+SCHEME_NEWS_MAX_ITEMS = 12
 VISA_PRESS_FEED = "https://investor.visa.com/rss/pressrelease.aspx"
 # Job adverts and login pages that site-restricted searches pick up.
 SCHEME_NEWS_JUNK = re.compile(
@@ -473,11 +502,10 @@ def build_ai_input_document(articles):
     """Turn RSS articles into a compact, model-friendly document."""
     lines = []
 
-    # Seed known regulatory events so the AI always surfaces them in the EVENTS block.
-    # The prompt rule "future dates only" will drop any that have already passed.
-    known_block = "[KNOWN_REGULATORY_EVENTS — always include future-dated entries in the EVENTS table]\n"
-    for ev in KNOWN_EVENTS:
-        known_block += f"Date: {ev['date']} | Event: {ev['event']} | Type: {ev['type']} | URL: {ev['url']} | Relevance: {ev['relevance']}\n"
+    # Tracked events carried over from earlier runs (KnownEvents.json), so they survive the article age window.
+    known_block = "[TRACKED_EVENTS — carried over from earlier runs; include future-dated ones in the EVENTS table]\n"
+    for ev in load_events():
+        known_block += f"Date: {ev['date']} | ISO: {ev['iso']} | Event: {ev['event']} | Type: {ev['type']} | URL: {ev['url']} | Relevance: {ev['relevance']}\n"
     lines.append(known_block)
 
     add_coverage_counts(articles)
@@ -968,7 +996,7 @@ NEWSLETTER_PROMPT = """
     migration" and not "updates". Prefer concrete nouns, numbers, dates, named schemes and affected participants over
     vague verbs. If the input does not support a claim about scale, do not invent one, but never understate what it does say.
 
-    RECENCY: today is {TODAY}. Use only items published in the last 30 days and ignore anything older, however relevant.
+    RECENCY: today is {TODAY}. Use only items published in the last {MAX_AGE_DAYS} days and ignore anything older, however relevant.
     Within that window prioritise by payments relevance first, then recency.
 
     SOURCE QUALITY: every article has a "Source type". Treat Regulator and Industry body items as primary evidence.
@@ -1070,10 +1098,22 @@ NEWSLETTER_PROMPT = """
 
     [BLOCK:EVENTS]
     Max 6 upcoming events, future dates only (today is {TODAY}). Input-only. Python renders the table.
+    Include the TRACKED_EVENTS entries that are still in the future and add any new future-dated events, deadlines,
+    consultation closing dates, go-lives and conferences announced in the articles. If more than 6 qualify, prefer
+    High relevance and the soonest dates.
+    PAYMENTS ONLY (CRITICAL): an event qualifies only if it is directly about payments: payment rails and schemes,
+    PSPs/e-money/open banking, payments or safeguarding regulation, APP fraud/scams, payments resilience and
+    payments-specific financial crime, stablecoins or crypto used for payments, or a payments industry conference.
+    Exclude general financial services with no direct payments effect (pensions, mortgages, insurance, savings,
+    investment, general banking prudential or consumer-credit items) even when the regulator is the FCA or BoE.
+    A broad rule such as Basel 3.1 qualifies only when the input ties it to payments firms. If unsure, leave it out.
+    Apply this test to TRACKED_EVENTS as well and drop any that fail it.
     One event per block, separated by --- on its own line:
-    DATE:12 Nov|EVENT:event name|TYPE:[reg|comp|infra|scheme]|REL:[High|Medium|Watch]
-    URL:https://... (source URL from the input document, omit line if none)
+    DATE:12 Nov 2026|EVENT:event name|TYPE:[reg|comp|infra|scheme]|REL:[High|Medium|Watch]|ISO:2026-11-12
+    URL:https://... (source URL from the input document; REQUIRED, omit the event if there is none)
     ---
+    ISO is REQUIRED: the exact date as YYYY-MM-DD. If the input gives only a month, use the last day of that month. If the
+    input does not support any date, omit the event; never guess a date.
     If none, leave the block empty.
     [END]
 
@@ -1154,7 +1194,7 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
             f.write(document)
         print(f"🗒️  Saved model input: GeneratedInputs/{os.path.basename(input_path)}")
     today_str = datetime.now().strftime("%d %b %Y")
-    prompt = NEWSLETTER_PROMPT.replace("{TODAY}", today_str)
+    prompt = NEWSLETTER_PROMPT.replace("{TODAY}", today_str).replace("{MAX_AGE_DAYS}", str(MAX_ARTICLE_AGE_DAYS))
 
     # ── CALL SELECTED PROVIDER ──────────────────────────────────────────────
     if LLM_PROVIDER == "openai":
@@ -1224,6 +1264,10 @@ def generate_newsletter_html(client, articles, template_path="TEMPLATE.html"):
                 break
 
     blocks = extract_blocks(ai_text)
+
+    if not replay:  # replays are tests: don't let them change the tracked events
+        added = update_event_store(blocks.get("EVENTS", ""), document)
+        print(f"🗓️  Tracked events: {len(load_events())} upcoming ({added} new this run)")
 
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()

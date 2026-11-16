@@ -36,9 +36,10 @@ Curators: Liam Grimwood + Morgan Moloney (Manchester Payments Team).
 - **`KEY_NUMBERS` `NOTE` field**: optional short context under a stat card (e.g. "Up 0.25 percentage points"); must come from the input.
 - **`ANTHROPIC_MODEL`** (line ~25): Currently `claude-sonnet-4-6`.
 - **`RSS_FEEDS`** (lines ~55–85): Dictionary of source name → RSS URL. Covers BoE, FCA, ECB, PYMNTS, Payments Dive, Electronic Payments International, UK Finance, Pay.UK, EMA, EPC, FT, Sky News, etc. Each organisation counts as one source (all BoE feeds = "Bank of England") for the prompt's per-organisation story caps.
-- **`articlesCountPerFeed`**: Articles fetched per feed (default: 7).
+- **`articles_per_feed`**: Articles fetched per feed (default: 15, so prolific feeds reach back across the fortnight).
 - **Scheme sources** (`fetch_scheme_press`): Visa is read from its own press-release RSS (`VISA_PRESS_FEED`). Mastercard and SWIFT block scripted access (403), so they are read via `SCHEME_NEWS_FEEDS` (Google News RSS limited to their own domains).
-- **`MAX_ARTICLE_AGE_DAYS`**: Articles older than this (default 30) are dropped at fetch time; the prompt also enforces the window.
+- **`MAX_ARTICLE_AGE_DAYS`**: Articles older than this (default 14, for the fortnightly send) are dropped at fetch time; the prompt reads the same constant via `{MAX_AGE_DAYS}`.
+- **Tracked events** (`KnownEvents.json`, `load_events`, `update_event_store`): auto-populated. Each run saves the model's future-dated EVENTS (exact ISO date, URL must exist in the input) and feeds them into the next run, so events outlive the 14-day article window; past ones drop out. No hand-maintained list. The workflow commits the file back so it persists in CI. Replays (`NEWSBOT_INPUT_FILE`) don't update it.
 - **`NEWSLETTER_PROMPT`**: Large system prompt defining newsletter structure, section rules, geographic filters, and word/length constraints.
 - **`OPENAI_MAX_TOKENS`**: Token cap for OpenAI response (default: 8000).
 
@@ -127,7 +128,7 @@ Outputs two files in `GeneratedReports/`. Open the browser file to check layout;
 
 ## GitHub Actions Schedule
 
-Workflow at `.github/workflows/newsletter.yml` runs every **Monday at 07:00 UTC** (08:00 UK / 09:00 CEST). Can also be triggered manually from the GitHub Actions tab. Generated HTML files are uploaded as artifacts (retained 30 days).
+Workflow at `.github/workflows/newsletter.yml` runs every **Monday at 07:00 UTC** (08:00 UK / 09:00 CEST). The newsletter is sent fortnightly but the workflow still runs weekly; send every other run. Can also be triggered manually from the GitHub Actions tab. Generated HTML files are uploaded as artifacts (retained 30 days).
 
 Email delivery (task 6) is not yet wired up — for now, download artifacts from the Actions run.
 

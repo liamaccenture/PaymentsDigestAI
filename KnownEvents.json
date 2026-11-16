@@ -1,0 +1,47 @@
+[
+  {
+    "date": "Nov 2026",
+    "iso": "2026-11-30",
+    "event": "STEP2 DKK go-live (EBA Clearing)",
+    "type": "infra",
+    "url": "https://www.ebaclearing.eu/",
+    "relevance": "High",
+    "first_seen": "2026-11-16"
+  },
+  {
+    "date": "31 Dec 2026",
+    "iso": "2026-12-31",
+    "event": "FCA Quantum Experimentation Group registration closes",
+    "type": "reg",
+    "url": "https://www.fca.org.uk/news/press-releases/fca-explore-quantum-computing-tackle-financial-crime",
+    "relevance": "Medium",
+    "first_seen": "2026-11-16"
+  },
+  {
+    "date": "1 Jan 2027",
+    "iso": "2027-01-01",
+    "event": "Basel 3.1 UK go-live",
+    "type": "reg",
+    "url": "https://www.bankofengland.co.uk/",
+    "relevance": "High",
+    "first_seen": "2026-11-16"
+  },
+  {
+    "date": "11 Feb 2027",
+    "iso": "2027-02-11",
+    "event": "Payments Regulation and Innovation Summit 2027",
+    "type": "comp",
+    "url": "https://e-ma.org/events/payments-regulation-and-innovation-summit-2027",
+    "relevance": "Medium",
+    "first_seen": "2026-11-16"
+  },
+  {
+    "date": "25 Oct 2027",
+    "iso": "2027-10-25",
+    "event": "UK cryptoasset full regime enters force",
+    "type": "reg",
+    "url": "https://www.fca.org.uk/",
+    "relevance": "High",
+    "first_seen": "2026-11-16"
+  }
+]
